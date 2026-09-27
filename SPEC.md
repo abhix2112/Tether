@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.1.4, §3.4 H2, E4: add a session-history predictor for sim/E4; the tool-keyed predictor is evaluated only on live data.
 - 2026-09-27 — §6.3: loader tags gaps spanning a subagent group as `SubagentWait`.
 - 2026-09-27 — §6.3, §6.4, §6.1.4, E2: traces have no tool/user labels; sim treats main-turn gaps as tool pauses, 042026 supplies the prior and a 13% re-label sensitivity run.
 - 2026-09-27 — §6.4: sim runs at `--block-size 64` in word mode (one hash_id = one sim block); real vLLM keeps its default.
@@ -177,7 +178,8 @@ working implementation and public data, and contributing to those upstream effor
   tokens and p90 TTFT of tool-resume turns versus a strong prefix-aware router with LRU. The benefit shrinks
   toward zero when KV capacity is ample.
 - **H2.** Pause length after a tool call is predictable enough to set TTLs: the predicted p90 covers
-  ≥ 85% of actual pauses on held-out sessions.
+  ≥ 85% of actual pauses on held-out sessions. In simulation H2 is tested with the **session-history**
+  predictor (the traces have no tool names). The tool-keyed predictor is tested only on live data (E7).
 - **H3.** Program affinity (routing sibling subagents and forks to the worker already holding their shared
   system/tool or parent prefix) reduces subagent first-turn prefill.
 - **H4.** From unmodified Claude Code / OpenCode traffic, the gateway attributes turns to the correct
@@ -357,8 +359,15 @@ at 8.
   after requests with `stop == "tool_use"`), committed under `priors/` with provenance. Blend it with the
   per-key estimate using weight `n / (n + k)`, `k = 20`.
 - **Output:** `Prediction { q50, q90, cdf(t) }`.
-- **Evaluation (E4):** train on 70% of sessions, test on 30%. Report p90 coverage, MAE of q50, and a
-  calibration plot.
+- **Two predictors behind one trait** (`PausePredictor`):
+  - **Tool-keyed** (above): used by the gateway on live traffic, where tool names are visible.
+    **Evaluated only on live data (E7)**, because no trace carries tool names.
+  - **Session-history**: predicts from *this session's* recent gaps (an EWMA of log-gap plus a small
+    window of recent gaps for quantiles), blended with the global prior using the same `n / (n + k)`
+    weight, where `n` is the number of gaps seen so far in the session. **This is the predictor used in
+    simulation and in E4.** The gateway can also use it as a fallback when a key has no data.
+- **Evaluation (E4):** session-history predictor; train the prior on 70% of sessions, test on 30%. Report
+  p90 coverage, MAE of q50, and a calibration plot.
 
 #### 6.1.5 Retention policy
 
@@ -797,7 +806,7 @@ tether/
 | **E1** | Does our loader see the same workload as published? | loader | Turns/session, input/output lengths, prefix reuse, subagent share, gap distributions (tool vs user). Must be close to published AgentX figures (§3.1); explain any differences. |
 | **E2** | H1: does lifecycle-aware retention help, and when? | sim | All 5 routers × actuator ∈ {noop, retain, pin, touch-model} × KV capacity ∈ {0.25, 0.5, 0.75, 1.0, 1.5}× aggregate working set × concurrency ∈ {8, 16, 32, 64} × workers ∈ {2, 4, 8}; 3 seeds. Plus the lifecycle-label sensitivity run (§6.3) on a representative subset |
 | **E3** | Which parts matter? | sim | Ablations: −predictor (fixed TTL 30 s), −program affinity, −budget, retain vs pin, `user_wait_policy` |
-| **E4** | H2: is pause length predictable? | loader + core | 70/30 split by session; p90 coverage, q50 MAE, calibration curve |
+| **E4** | H2: is pause length predictable? | loader + core | Session-history predictor (§6.1.4); 70/30 split by session; p90 coverage, q50 MAE, calibration curve. Tool-keyed predictor: live data only, in E7 |
 | **E5** | Does the real gateway match the simulator? | compose (gateway + patched sim workers) | Same configs as a subset of E2; per-metric agreement within tolerance (target ±10%) |
 | **E6** | Does it work on real GPUs? | 2 vLLM workers | `prefix_aware` vs `tether+touch` vs `tether+touch+spec_prefill` at 2 pressure levels (set via `--num-gpu-blocks-override` **[VERIFY]**); also calibrate the sim profile and report sim-vs-real error |
 | **E7** | H4: can we infer lifecycle from real harnesses? | live | ≥ 20 scripted sessions each with OpenCode and Claude Code against vLLM via Tether. Ground truth from harness transcripts (e.g. Claude Code JSONL session logs). Report session attribution accuracy, tool-pause precision/recall, subagent detection, and miss-cause breakdown (`tether doctor`) |
