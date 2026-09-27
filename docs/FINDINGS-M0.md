@@ -110,11 +110,56 @@ The same 2,005-token streaming chat request was sent three times (`stream_option
 
 ## A3 — vLLM `session_id` / `X-Session-ID` and session labels in `BlockStored`
 
-_Pending._
+**Verdict: ✅ in v0.30.0 (source); runtime check _in progress_.**
+
+- **Session id in:** PR #48048 (in v0.29.0+) adds `session_id` via:
+  - the request body `session_id` on chat, completions and responses requests (`session_id: str | None`
+    in `chat_completion/protocol.py` and `completion/protocol.py` at v0.30.0);
+  - the HTTP header `X-Session-ID`;
+  - a temporary fallback, `vllm_xargs["session_id"]`.
+
+  It "does not add session-aware scheduling or routing"; it only carries identity inside the engine.
+- **Session label out:** PR #51381 (in v0.30.0, **not** v0.29.0) adds `session_id: str | None = None` to
+  `BlockStored` (`vllm/distributed/kv_events.py`). Details:
+  - It is set for newly admitted full blocks, for reused prefix blocks (when `kv_cache_report_mode="full"`)
+    and for partial prefix-cache entries.
+  - It names the request that *triggered* the store; it does **not** mean exclusive ownership, since a
+    block may be shared.
+  - **`BlockRemoved` stays keyed only by hash, with no session.** To tell which session lost blocks,
+    Tether must map hashes back to sessions itself.
+- **Encoding at v0.30.0 is map-only.** `KVCacheEvent` is a `msgspec` struct with `tag=True` (key
+  `"type"`) and `omit_defaults=True`, with no `array_like`. So `session_id` appears only when set, and
+  vLLM no longer sends the legacy positional arrays; only the sim does, by default.
+  - `BlockStored` map fields: `block_hashes, parent_block_hash, token_ids, block_size, lora_id, medium,
+    lora_name, extra_keys, group_idx, kv_cache_spec_kind, kv_cache_spec_sliding_window, locality,
+    ownership, session_id`.
+  - `BlockRemoved` map fields: `block_hashes, medium, group_idx, locality, ownership`.
+  - The batch itself (`EventBatch`) is still array-like: `[ts, events, data_parallel_rank?]`.
+- **Publisher socket direction.** `ZmqEventPublisher` **binds** if the endpoint contains `*` (default
+  `tcp://*:5557`), `::`, or is `ipc://` / `inproc://`; otherwise it **connects**. So Tether can bind one
+  SUB socket per worker and have both vLLM (endpoint without `*`) and the sim dial in.
+  - Replay uses a ROUTER socket, and each reply is `[client_id, "", topic, seq(8B BE), payload]`.
+- `KVEventsConfig` fields: `enable_kv_cache_events, publisher ("null"|"zmq"), endpoint, replay_endpoint,
+  buffer_steps, hwm, max_queue_size, topic` (default topic `""`).
+- The sim (§6.5 patch) should emit `session_id` in the same map shape.
 
 ## A4 — vLLM flags
 
-_Pending._
+**Verdict: ✅ all present at v0.30.0 (source); partly confirmed at runtime.**
+
+| Item | Where (v0.30.0) | Runtime |
+|---|---|---|
+| `--kv-events-config` (JSON) | `engine/arg_utils.py` | ✅ accepted by `vllm/vllm-openai-cpu:v0.30.0` |
+| `--enable-prompt-tokens-details` | server args | ✅ accepted |
+| `--num-gpu-blocks-override` | `engine/arg_utils.py` (`num_gpu_blocks_override`) | _pending_ (GPU-specific; see note) |
+| `--block-size`, `--enable-prefix-caching`, `--max-num-seqs`, `--kv-cache-memory-bytes`, `--gpu-memory-utilization` | `engine/arg_utils.py` | — |
+| `--enable-auto-tool-choice --tool-call-parser hermes` | server args | ✅ accepted |
+| `ignore_eos` | request field on chat and completions (`ignore_eos: bool = False`) | _pending_ |
+| token-id prompts on `/v1/completions` | `completion/protocol.py` `prompt` field | _pending_ |
+| per-request `priority`, `cache_salt` | request fields on chat and completions | — |
+
+Note: on the CPU backend, KV size is set by `VLLM_CPU_KVCACHE_SPACE` (GB), so
+`--num-gpu-blocks-override` can only be meaningfully checked on a GPU.
 
 ## A5 — vLLM `/v1/messages` with current Claude Code, cached-token usage
 
@@ -122,7 +167,23 @@ _Pending._
 
 ## A6 — vLLM metric names
 
-_Pending._
+**Verdict: ✅ all §6.2.3 metrics exist at v0.30.0 (source); final exposed names confirmed at runtime
+_pending_.**
+
+- Declared in `vllm/v1/metrics/loggers.py`:
+  - `vllm:num_requests_running`, `vllm:num_requests_waiting`;
+  - `vllm:kv_cache_usage_perc` (not the older `gpu_cache_usage_perc`);
+  - `vllm:prefix_cache_hits` and `vllm:prefix_cache_queries`. These are counters declared without
+    `_total`; the Prometheus client adds `_total` when exposing them, and the sim already exposes the
+    `_total` names;
+  - `vllm:cache_config_info`.
+- **Useful new metrics for Tether:**
+  - `vllm:kv_block_idle_before_evict_seconds` measures how long a block sits unused before eviction. That
+    is a direct measurement of the LRU horizon `H(w)` that §6.1.6 *estimates* from the `BlockStored` rate.
+  - `vllm:kv_block_lifetime_seconds` and `vllm:kv_block_reuse_gap_seconds`.
+  - `vllm:num_requests_waiting_by_reason` and `vllm:prompt_tokens_cached`.
+  - `vllm:external_prefix_cache_hits` / `_queries` (offloading connectors).
+- Metric names are mapped per worker `kind` (§6.2.3); the sim and vLLM agree on all the names Tether uses.
 
 ## A7 — AgentX/Weka trace schemas, HF repo ids, license
 
@@ -176,7 +237,29 @@ Downloads live in the gitignored `data/` directory, fetched by the pinned revisi
 
 ## A8 — Session identifiers sent by Claude Code / OpenCode / Codex
 
-_Pending._
+**Claude Code: partial (free probe done; real capture pending the owner's go-ahead).** OpenCode:
+_pending_. Codex: skipped (the owner decided not to install Node).
+
+### Free probe (no request reached Anthropic)
+
+- **Claude Code 2.1.205**, OAuth (subscription) login, `ANTHROPIC_BASE_URL=http://127.0.0.1:9199`,
+  pointed at a local listener that recorded only method, path, header **names**, auth scheme and top-level
+  body keys, then answered 503.
+- ✅ An OAuth login **does** use a custom `ANTHROPIC_BASE_URL`. It sends `Authorization: Bearer …` and no
+  `x-api-key`. So a logging passthrough to `api.anthropic.com` is feasible for the real capture.
+- The request is `POST /v1/messages?beta=true`, so **the path carries a query string**. The gateway must
+  match `/v1/messages` regardless of query.
+- Header names sent:
+  - `accept, accept-encoding, anthropic-beta, anthropic-dangerous-direct-browser-access, anthropic-version,
+    authorization, connection, content-length, content-type, host, user-agent, x-app,`
+  - **`x-claude-code-session-id`**,
+  - `x-stainless-arch, -lang, -os, -package-version, -retry-count, -runtime, -runtime-version, -timeout`.
+- **`x-claude-code-session-id` is a harness-specific session header**, the §6.1.2 step 2 candidate. Still
+  to confirm in the real capture: is it stable across turns, and what do subagents and `/compact` send?
+- Top-level body keys: `context_management, max_tokens, messages, metadata, model, output_config, stream,
+  system, thinking, tools`.
+- On a 503 it retried with the same headers (`x-stainless-retry-count` increments). Six attempts were seen
+  in 25 s.
 
 ## A9 — Upstream status
 
