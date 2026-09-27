@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §15: rules for captured traffic (outside the repo, redacted, structure-only commits).
 - 2026-09-27 — §13 M0/M5: source-reading answers allowed in M0 if labelled; deferred runtime checks become M5 items.
 - 2026-09-27 — §0.2: third-party numbers allowed only with an inline link and a "reported by <source>" label.
 
@@ -952,6 +953,10 @@ Rough effort assumes one developer working with a coding agent. Adjust freely.
   no auth.
 - Bind `127.0.0.1` by default. The dashboard and admin endpoints have no auth; don't expose them.
 - The decision log contains fingerprints and token counts, never content.
+- **Captured traffic** (M0 recon, E7, debugging): raw captures live outside the repo (or under a
+  gitignored `captures/` directory) and are deleted once the findings they support are written. Auth
+  headers are redacted at write time; `metadata.user_id` and any account ids are hashed. Only structure is
+  committed — field names, header names, hashes, counts — never prompt/response content or credentials.
 - Document the trust model in `SECURITY.md`, modeled on Cachet's.
 
 ---
