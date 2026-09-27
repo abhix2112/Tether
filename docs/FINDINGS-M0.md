@@ -110,7 +110,28 @@ The same 2,005-token streaming chat request was sent three times (`stream_option
 
 ## A3 — vLLM `session_id` / `X-Session-ID` and session labels in `BlockStored`
 
-**Verdict: ✅ in v0.30.0 (source); runtime check _in progress_.**
+**Verdict: ✅ confirmed at runtime and in source (v0.30.0).**
+
+Runtime setup (used for A3–A6 and A10): `vllm/vllm-openai-cpu:v0.30.0` (`sha256:85d12674…`) serving
+`Qwen/Qwen2.5-0.5B-Instruct` @ `7ae557604adf67be50417f59c2c2f167def9a775` (Apache-2.0; `model.safetensors`
+sha256 verified), `VLLM_CPU_KVCACHE_SPACE=1`, `--kv-events-config
+'{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://127.0.0.1:5560","topic":"kv"}'`.
+A Rust `zeromq` SUB socket was bound on :5560 (see A10).
+
+Runtime observations:
+
+- A `BlockStored` event carried `session_id` for all three routes: the `X-Session-ID` header on
+  `/v1/chat/completions`, the body `session_id` on `/v1/chat/completions`, and the `X-Session-ID` header on
+  `/v1/messages`.
+- Requests without a session id produced `BlockStored` events **without** the key (`omit_defaults`).
+- Requests that were full prefix hits (`created_cache_tokens: 0`) produced **no** `BlockStored`, even
+  with a session id. With the default report mode, reused blocks aren't re-announced, so the gateway
+  can't learn "session S reused these blocks" from events alone.
+- Observed map keys: `type, block_hashes, parent_block_hash, token_ids, block_size, lora_id, medium,
+  lora_name, extra_keys, group_idx, kv_cache_spec_kind` (+ `session_id` when set).
+- On the CPU backend, `block_size` is **128** and `medium` is still `"GPU"`. GPU vLLM defaults to 16.
+
+Source:
 
 - **Session id in:** PR #48048 (in v0.29.0+) adds `session_id` via:
   - the request body `session_id` on chat, completions and responses requests (`session_id: str | None`
@@ -151,11 +172,11 @@ The same 2,005-token streaming chat request was sent three times (`stream_option
 |---|---|---|
 | `--kv-events-config` (JSON) | `engine/arg_utils.py` | ✅ accepted by `vllm/vllm-openai-cpu:v0.30.0` |
 | `--enable-prompt-tokens-details` | server args | ✅ accepted |
-| `--num-gpu-blocks-override` | `engine/arg_utils.py` (`num_gpu_blocks_override`) | _pending_ (GPU-specific; see note) |
+| `--num-gpu-blocks-override` | `engine/arg_utils.py` (`num_gpu_blocks_override`) | **source only; runtime check deferred to M5** (GPU-specific; see note) |
 | `--block-size`, `--enable-prefix-caching`, `--max-num-seqs`, `--kv-cache-memory-bytes`, `--gpu-memory-utilization` | `engine/arg_utils.py` | — |
 | `--enable-auto-tool-choice --tool-call-parser hermes` | server args | ✅ accepted |
-| `ignore_eos` | request field on chat and completions (`ignore_eos: bool = False`) | _pending_ |
-| token-id prompts on `/v1/completions` | `completion/protocol.py` `prompt` field | _pending_ |
+| `ignore_eos` | request field on chat and completions (`ignore_eos: bool = False`) | ✅ exactly `max_tokens` generated, `finish_reason: "length"` |
+| token-id prompts on `/v1/completions` | `completion/protocol.py` `prompt` field | ✅ `prompt: [1000..1299]` → `prompt_tokens: 300` |
 | per-request `priority`, `cache_salt` | request fields on chat and completions | — |
 
 Note: on the CPU backend, KV size is set by `VLLM_CPU_KVCACHE_SPACE` (GB), so
@@ -163,12 +184,61 @@ Note: on the CPU backend, KV size is set by `VLLM_CPU_KVCACHE_SPACE` (GB), so
 
 ## A5 — vLLM `/v1/messages` with current Claude Code, cached-token usage
 
-_Pending._
+**Verdict: ✅ works at runtime (CPU image, v0.30.0) with one required setting.** **How: run.**
+
+### Direct API checks
+
+- `/v1/messages` and `/v1/messages?beta=true` are both accepted.
+- Non-streaming usage is Anthropic-shaped: `{input_tokens, output_tokens, cache_creation_input_tokens,
+  cache_read_input_tokens}`. `input_tokens` counts only uncached tokens. Sending the same request twice
+  moved 256 tokens from `cache_creation` (run 1) to `cache_read` (run 2).
+- **Streaming quirk:**
+  - `message_start.usage` reports `input_tokens` as the **total** (320) with no cache fields;
+  - the final `message_delta.usage` reports `input_tokens: 64` plus `cache_read_input_tokens: 256`;
+  - so the gateway must read cache usage from the **final `message_delta`**, not from `message_start`.
+- Tools: `stop_reason: "tool_use"` with a `tool_use` content block (Qwen2.5 + `--tool-call-parser
+  hermes`). On `/v1/chat/completions`: `finish_reason: "tool_calls"`.
+- OpenAI shape on chat and completions: `usage.prompt_tokens_details = {cached_tokens,
+  created_cache_tokens, multimodal_tokens}`.
+  - **`created_cache_tokens` is new** and not in the spec: tokens newly written to the cache. It is
+    useful for the miss explainer.
+  - It is `null` on token-id completions.
+
+### Claude Code 2.1.205 → structure-only logging proxy → vLLM
+
+- Env: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=<dummy>`, all model aliases set to `qwen`,
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
+- ❌ **Without a cap it fails:** Claude Code sends `max_tokens: 32000`, and vLLM returns 400 because
+  prompt + 32,000 > `max_model_len` (32,768).
+  **Required:** `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (1024 used), or a model with a much larger context.
+- ✅ With the cap, `claude -p "Reply with the single word: ok"` returned `ok` twice.
+  - Each request had 2 messages, 20 tools, `max_tokens: 1024`, and ~13,704 prompt tokens (Qwen tokenizer).
+  - **Run 2's first attempt read 13,696 tokens from cache** (`cache_read_input_tokens`), and TTFT fell
+    from minutes (CPU prefill) to 0.36 s. **The system + tools prefix is byte-stable across separate
+    Claude Code sessions.**
+- Each `claude -p` run sent a different `x-claude-code-session-id` (hashed values differ). That's
+  expected, since they are separate sessions.
+- In run 1 the client dropped a slow **streaming** attempt (the proxy saw a connection reset) and a
+  **non-streaming** request for the same turn followed. The gateway must expect duplicate attempts of
+  one turn (lineage: identical fingerprints, one aborted). This is inferred from the proxy log, not
+  confirmed from Claude Code's side.
+- ⚠️ **Security note:** both runs sent an `authorization` header, not `x-api-key`, despite
+  `ANTHROPIC_API_KEY` being set. So the OAuth bearer token very likely took precedence and went to the
+  local vLLM. It stayed on this machine: the proxy stores header names only, and vLLM doesn't log
+  headers by default. Future local runs will also set `ANTHROPIC_AUTH_TOKEN` to a dummy value.
 
 ## A6 — vLLM metric names
 
-**Verdict: ✅ all §6.2.3 metrics exist at v0.30.0 (source); final exposed names confirmed at runtime
-_pending_.**
+**Verdict: ✅ confirmed at runtime and in source (v0.30.0).**
+
+- Scraped from `/metrics` on the CPU image: `vllm:num_requests_running`, `vllm:num_requests_waiting`,
+  `vllm:num_requests_waiting_by_reason{reason=capacity|deferred}`, `vllm:kv_cache_usage_perc`,
+  `vllm:prefix_cache_queries_total`, `vllm:prefix_cache_hits_total`, `vllm:cache_config_info{block_size,
+  cache_dtype, enable_prefix_caching, gpu_memory_utilization, …}`.
+- Every series has labels `engine="0"` and `model_name`. The sim uses `model_name` only.
+- **`vllm:cache_config_info` does not expose `num_gpu_blocks` on the CPU backend's label set**
+  (truncated in the scrape; to re-check on GPU in M5). The sim exposes it. The gateway needs a fallback:
+  a per-worker `capacity_blocks` override (already in §6.2.3).
 
 - Declared in `vllm/v1/metrics/loggers.py`:
   - `vllm:num_requests_running`, `vllm:num_requests_waiting`;
@@ -285,7 +355,17 @@ _pending_. Codex: skipped (the owner decided not to install Node).
 
 ## A10 — Pure-Rust `zeromq` SUB against vLLM's PUB
 
-**Against the sim: ✅ works (run).** **Against vLLM: _pending_.**
+**Verdict: ✅ works against both the sim and vLLM v0.30.0 (run).**
+
+- **vLLM:** the SUB socket was bound on `tcp://127.0.0.1:5560`, and vLLM dialed in (endpoint without
+  `*`). Six map-encoded batches were received and decoded with `rmpv`: topic `kv` as configured, `seq`
+  starting at **0** (the sim starts at 1).
+- **Late subscriber, no loss:** the first batch received (seq 0) was from a request sent *before* this
+  subscriber process started. When the publisher dials, ZMQ queues messages until a peer connects (up to
+  its high-water mark). The flip side is that a restarted gateway gets stale events. The index must
+  tolerate re-delivered `BlockStored`, and use `ts` to discard old batches.
+
+Sim run:
 
 - Throwaway test program (not committed): `zeromq = "=0.6.0"` (features `tokio-runtime`,
   `tcp-transport`, no default features), `rmpv = "=1.3.1"`, `tokio = "=1.53.1"`.
