@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.3, §6.4, §6.1.4, E2: traces have no tool/user labels; sim treats main-turn gaps as tool pauses, 042026 supplies the prior and a 13% re-label sensitivity run.
 - 2026-09-27 — §6.4: sim runs at `--block-size 64` in word mode (one hash_id = one sim block); real vLLM keeps its default.
 - 2026-09-27 — §6.4, §17: canonical AgentX corpus `cc-traces-weka-062126` pinned as the reference; 051926 kept as a schema example.
 - 2026-09-27 — §15: rules for captured traffic (outside the repo, redacted, structure-only commits).
@@ -351,8 +352,8 @@ at 8.
   4096; LRU the keys).
 - **Estimator:** log-spaced histogram (e.g. 48 buckets from 10 ms to 30 min) with exponential decay
   (half-life configurable, default 200 observations). It gives quantiles and a CDF `P(gap ≤ t)`.
-- **Prior:** a global histogram of tool-resume gaps computed from AgentX traces (entries whose next input is
-  a tool result; use `input_kind` / `stop` fields if present, else all inter-turn gaps). Blend it with the
+- **Prior:** a global histogram of tool-resume gaps computed from the labelled 042026 trace set (gaps
+  after requests with `stop == "tool_use"`), committed under `priors/` with provenance. Blend it with the
   per-key estimate using weight `n / (n + k)`, `k = 20`.
 - **Output:** `Prediction { q50, q90, cdf(t) }`.
 - **Evaluation (E4):** train on 70% of sessions, test on 30%. Report p90 coverage, MAE of q50, and a
@@ -569,11 +570,18 @@ Every actuator call is recorded in the decision log with its cost (tokens, slot-
 - **Workload:** AgentX/Weka traces via `tether-bench`'s loader crate.
   - Closed-loop concurrency N: keep N sessions active, and start the next session when one finishes.
   - Inter-turn delay = trace `think_time` (optionally scaled or capped).
-  - Subagent groups start at their recorded offsets. The parent's next turn waits for the group (SPAWN/JOIN
-    in newer trace versions).
+  - Subagent groups start at their recorded offsets. The parent's next turn waits for the group (no trace
+    version found in M0 carries SPAWN/JOIN topology; the group's position and timestamps are all we have).
 - **Gateway logic:** the simulator calls the same `tether-core` router/lifecycle/predictor/retention code
-  as the gateway, feeding it simulated events. Lifecycle signals come from the trace (next input is a tool
-  result vs user input), i.e. "hint mode".
+  as the gateway, feeding it simulated events ("hint mode").
+- **Lifecycle labels in simulation.** The canonical corpus has **no** `stop` / `input_kind` fields
+  (FINDINGS-M0 §A7), so the simulator can't know whether a gap was a tool pause or a user wait.
+  - **Default:** every main-turn gap is a tool pause (`X-Tether-Next: tool`). In the labelled 042026 set,
+    87% of turns end in `tool_use`, and gap length does not separate tool from user pauses, so no
+    heuristic does better.
+  - **Sensitivity run** (part of E2): re-label a random 13% of main-turn gaps as user waits. Choose which
+    gaps with probability proportional to `P(user | gap length)` estimated from 042026, scaled so that
+    13% are re-labelled overall. Keep the recorded durations. Report how E2's conclusions change.
 - **Output:**
   - `requests.jsonl` (session, turn, worker, prompt/cached tokens, queue time, TTFT, E2E, miss reason);
   - `summary.json` (all metrics in §11.3, config, seed, git SHA, command line).
@@ -589,7 +597,12 @@ Every actuator call is recorded in the decision log with its cost (tokens, slot-
   - request: `t`, `type` (`n` / `s` / `subagent`), `model`, `in`, `out`, `hash_ids`, `api_time`,
     `think_time`, `ttft`;
   - subagent groups: `agent_id`, `subagent_type`, `duration_ms`, nested `requests[]`;
-  - newer versions add `stop`, `input_types`, `input_kind` and SPAWN/JOIN topology.
+  - only the oldest build (`cc-traces-weka-042026`, 739 traces) has `stop`, `input_types`, `output_types`
+    and per-trace `system_tokens` / `tool_tokens`. The canonical v7 set has none of these, and no build has
+    `input_kind` or SPAWN/JOIN topology (FINDINGS-M0 §A7).
+- **Labelled companion corpus:** `semianalysisai/cc-traces-weka-042026` @
+  `ae1ab9b568b8b5896c561692c40a6703cf5f8525` (Apache-2.0) is used for the predictor prior (§6.1.4), E4, and
+  the lifecycle-label sensitivity run (§6.3). It is never used for E2/E3 headline results.
 - Reference corpus: **`semianalysisai/cc-traces-weka-062126`** (the canonical AgentX set: 393 traces, trace
   format v7, Apache-2.0), pinned at revision `23f152f6f0f9399a85901b89a6458def0ef16729`. Other builds (e.g.
   `cc-traces-weka-with-subagents-051926`, format v5) are schema examples only. Revisions, hashes and
@@ -777,7 +790,7 @@ tether/
 | ID | Question | Where | Setup |
 |---|---|---|---|
 | **E1** | Does our loader see the same workload as published? | loader | Turns/session, input/output lengths, prefix reuse, subagent share, gap distributions (tool vs user). Must be close to published AgentX figures (§3.1); explain any differences. |
-| **E2** | H1: does lifecycle-aware retention help, and when? | sim | All 5 routers × actuator ∈ {noop, retain, pin, touch-model} × KV capacity ∈ {0.25, 0.5, 0.75, 1.0, 1.5}× aggregate working set × concurrency ∈ {8, 16, 32, 64} × workers ∈ {2, 4, 8}; 3 seeds |
+| **E2** | H1: does lifecycle-aware retention help, and when? | sim | All 5 routers × actuator ∈ {noop, retain, pin, touch-model} × KV capacity ∈ {0.25, 0.5, 0.75, 1.0, 1.5}× aggregate working set × concurrency ∈ {8, 16, 32, 64} × workers ∈ {2, 4, 8}; 3 seeds. Plus the lifecycle-label sensitivity run (§6.3) on a representative subset |
 | **E3** | Which parts matter? | sim | Ablations: −predictor (fixed TTL 30 s), −program affinity, −budget, retain vs pin, `user_wait_policy` |
 | **E4** | H2: is pause length predictable? | loader + core | 70/30 split by session; p90 coverage, q50 MAE, calibration curve |
 | **E5** | Does the real gateway match the simulator? | compose (gateway + patched sim workers) | Same configs as a subset of E2; per-metric agreement within tolerance (target ±10%) |
