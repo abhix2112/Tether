@@ -390,6 +390,17 @@ MessagePack (compact binary JSON). Tether subscribes.
 - ✅ Why does SPEC insist on showing the whole "benefit vs memory pressure" curve instead of the best
   point?
 
+### 4.8 Supply-chain hygiene: pin by hash, verify downloads (added in M0)
+A version tag like `v7.0.1` can be moved to point at different code. A commit SHA or a file's SHA-256
+can't. Tether pins CI actions to full commit SHAs, and every downloaded binary, model or trace file is
+checked against a published SHA-256 before use (see `docs/FINDINGS-M0.md` → Pins).
+
+- **Where in Tether:** `.github/workflows/ci.yml`, `rust-toolchain.toml`, `Cargo.lock`, and the pinned
+  dataset/model revisions in `docs/FINDINGS-M0.md`.
+- 📖 [GitHub Docs — Secure use reference (pin actions to a full-length commit SHA)](https://docs.github.com/en/actions/reference/security/secure-use)
+- ✅ Why is `uses: actions/checkout@v7` riskier than `uses: actions/checkout@<40-char SHA>`? What does
+  `Cargo.lock` pin that `Cargo.toml` doesn't?
+
 ### 4.7 Docker Compose, Kubernetes (stretch), Go (sim patch), ADRs
 - 📖 [Docker Compose docs](https://docs.docker.com/compose/) — the local stack (§9)
 - 📖 [Kubernetes concepts overview](https://kubernetes.io/docs/concepts/overview/) — only for the llm-d stretch goal
