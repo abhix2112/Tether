@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §3.3, §9: vLLM status updated (#53423 merged, plumbing only; #51381 in v0.30.0); vLLM pinned to v0.30.0.
 - 2026-09-27 — §6.2.4: gateway binds one SUB per worker, workers dial in; map encoding primary; seq/ts dedupe; index rebuilt on restart.
 - 2026-09-27 — §11.3: side-call handling and side-class fairness are measured only in E7 (traces contain no side calls).
 - 2026-09-27 — §3.1, E1, E3: Dynamo pause figure labelled as reported; E1 reports full gap CDFs before TTL tuning; E3 adds short-pause-only and `max_ttl` variants.
@@ -167,7 +168,7 @@ until E1 has reported the full gap distributions.
 | **NVIDIA Dynamo** | KV-aware router, priority scheduling, `nvext.agent_hints` (`priority`, `osl`, `speculative_prefill`) | Needs the harness to send hints; TTL/pin retention is stated as future API work |
 | **llm-d** | Prefix-cache-aware scheduling (EPP), GPU-free `llm-d-inference-sim` with KV events | RFC [#2584](https://github.com/llm-d/llm-d/issues/2584) (opened 2026-09-25) proposes session pin/heartbeat/close + context-weighted eviction — **no implementation yet** |
 | **AIBrix** | Distributed KV cache, prefix-aware routing | RFC [#2814](https://github.com/vllm-project/aibrix/issues/2814) (same idea) — proposal only |
-| **vLLM** | Session identity plumbing (PR #48048, merged); `session_id` in KV events (PR #51381, merged) **[VERIFY]** | Retention API RFC [#37003](https://github.com/vllm-project/vllm/issues/37003) / PR #38514 **open**; KV hints envelope PR #53423 **open**; programmable-KV RFC [#57103](https://github.com/vllm-project/vllm/issues/57103) is design only |
+| **vLLM** | Session identity plumbing (PR #48048, merged, in v0.29.0+); `session_id` on map-encoded `BlockStored` (PR #51381, merged, first released in **v0.30.0**); KV hints request envelope (PR #53423, merged 2026-09-21, on main only, **plumbing only: no actions are defined or executed**). Verified in M0 (FINDINGS-M0 §A3, §A9) | Retention API RFC [#37003](https://github.com/vllm-project/vllm/issues/37003) / PR #38514 **open**; programmable-KV RFC [#57103](https://github.com/vllm-project/vllm/issues/57103) is design only. Tether watches #53423 but does not depend on it |
 | **vLLM agentic-api** | Rust gateway owning Responses/Messages state | Issue [#364](https://github.com/vllm-project/agentic-api/issues/364): *plans* to expose tool-execution lifecycle to llm-d cache policy |
 
 **The gap Tether fills:**
@@ -782,7 +783,7 @@ tether-bench   replay --target http://127.0.0.1:9100 --traces ... --sessions 60 
 | Simulator patch | Go (llm-d-inference-sim's language) | Upstreamable |
 | Analysis | Python 3.12 + `uv`, polars, matplotlib | Plots only |
 | Local stack | Docker Compose: gateway + 2–4 patched sim workers + Prometheus + Grafana | Runs on a laptop, no GPU |
-| GPU validation | vLLM (pinned), 1 GPU running 2 instances or 2 GPUs; small open instruct model with tool-calling support **[VERIFY a current good choice, ~4–8B]** | Cheap and real |
+| GPU validation | vLLM **v0.30.0** (commit `ced6857afa0ea7b2e3f0846a62e1394e90f15607`; CPU image `vllm/vllm-openai-cpu:v0.30.0` for GPU-free checks), 1 GPU running 2 instances or 2 GPUs; small open instruct model with tool-calling support **[VERIFY a current good choice, ~4–8B]** | Cheap and real |
 | CI | GitHub Actions: fmt, clippy, test, determinism check, 60-second sim smoke run on a synthetic fixture | |
 | Stretch infra | kind + llm-d (EPP with prefix-cache scorer) as an extra baseline; K8s manifests | Credibility with infra reviewers |
 
