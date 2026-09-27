@@ -1,0 +1,12 @@
+[package]
+name = "tether-traces"
+description = "AgentX/Weka trace loader and synthesizers shared by tether-sim and tether-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

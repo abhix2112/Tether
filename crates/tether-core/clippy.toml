@@ -1,0 +1,12 @@
+# tether-core must be pure and deterministic (SPEC §0.5): no wall clock, no sleeping, no unseeded
+# randomness. Time is always passed in as an argument. These bans make `cargo clippy -D warnings` fail
+# if anyone reaches for the clock inside core.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "tether-core is pure: pass time in as `Millis`" },
+    { path = "std::time::SystemTime::now", reason = "tether-core is pure: pass time in as `Millis`" },
+    { path = "std::thread::sleep", reason = "tether-core never blocks or sleeps" },
+]
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "std HashMap iteration order is randomized; use a deterministic map" },
+    { path = "std::collections::HashSet", reason = "std HashSet iteration order is randomized; use a deterministic set" },
+]

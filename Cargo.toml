@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/tether-core",
+    "crates/tether-traces",
+    "crates/tether-gateway",
+    "crates/tether-sim",
+    "crates/tether-bench",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/abhix2112/Tether"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"

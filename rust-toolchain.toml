@@ -1,0 +1,5 @@
+# Pinned per SPEC §0.4. CI installs exactly this toolchain.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
