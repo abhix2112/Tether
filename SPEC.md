@@ -14,6 +14,10 @@
 | License | MIT OR Apache-2.0 (same as Cachet) |
 | Primary language | Rust (gateway, core, simulator, replayer) · Go (small patch to the llm-d simulator) · Python (plots only) |
 
+### Changelog
+
+- 2026-09-27 — §0.2: third-party numbers allowed only with an inline link and a "reported by <source>" label.
+
 ---
 
 ## 0. Read this first — rules for the coding agent
@@ -26,6 +30,8 @@ This document is the single source of truth. Read it fully before writing code.
 2. **Never invent numbers.** Every number that appears in the README, `docs/RESULTS.md`, or a chart must
    come from a committed result file (`results/**/*.json`) produced by `tether-sim` or `tether-bench`, with
    the exact command line stored inside that file. If a result is bad or inconclusive, report it as such.
+   Numbers published by others (e.g. the AgentX figures in §3.1) may be quoted only with an inline link
+   and the label "reported by <source>", and are never presented as Tether's results.
 3. **Verify before you build on it.** Items marked **[VERIFY]** are external facts that were true on
    2026-09-27 according to public docs/issues but may have changed. Check each in M0, record the result in
    `docs/FINDINGS-M0.md`, and update Appendix A if reality differs. Adapt the design; don't hack around it.
