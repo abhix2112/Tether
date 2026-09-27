@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.3: loader tags gaps spanning a subagent group as `SubagentWait`.
 - 2026-09-27 — §6.3, §6.4, §6.1.4, E2: traces have no tool/user labels; sim treats main-turn gaps as tool pauses, 042026 supplies the prior and a 13% re-label sensitivity run.
 - 2026-09-27 — §6.4: sim runs at `--block-size 64` in word mode (one hash_id = one sim block); real vLLM keeps its default.
 - 2026-09-27 — §6.4, §17: canonical AgentX corpus `cc-traces-weka-062126` pinned as the reference; 051926 kept as a schema example.
@@ -576,7 +577,11 @@ Every actuator call is recorded in the decision log with its cost (tokens, slot-
   as the gateway, feeding it simulated events ("hint mode").
 - **Lifecycle labels in simulation.** The canonical corpus has **no** `stop` / `input_kind` fields
   (FINDINGS-M0 §A7), so the simulator can't know whether a gap was a tool pause or a user wait.
-  - **Default:** every main-turn gap is a tool pause (`X-Tether-Next: tool`). In the labelled 042026 set,
+  - **Subagent gaps:** the loader tags a main-turn gap that spans a subagent group (the group starts after
+    the previous main turn and the next main turn waits for it) as **`SubagentWait`**, not `ToolPause`.
+    Those gaps measure the subagent's run time, not a tool, and are excluded from tool-pause statistics
+    and priors.
+  - **Default for all other gaps:** a tool pause (`X-Tether-Next: tool`). In the labelled 042026 set,
     87% of turns end in `tool_use`, and gap length does not separate tool from user pauses, so no
     heuristic does better.
   - **Sensitivity run** (part of E2): re-label a random 13% of main-turn gaps as user waits. Choose which
