@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.2.4: gateway binds one SUB per worker, workers dial in; map encoding primary; seq/ts dedupe; index rebuilt on restart.
 - 2026-09-27 — §11.3: side-call handling and side-class fairness are measured only in E7 (traces contain no side calls).
 - 2026-09-27 — §3.1, E1, E3: Dynamo pause figure labelled as reported; E1 reports full gap CDFs before TTL tuning; E3 adds short-pause-only and `max_ttl` variants.
 - 2026-09-27 — §6.1.4, §3.4 H2, E4: add a session-history predictor for sim/E4; the tool-keyed predictor is evaluated only on live data.
@@ -516,12 +517,26 @@ retention grants.
 
 #### 6.2.4 KV event subscriber and index
 
-- ZMQ SUB to each worker's KV event endpoint. Frames: `[topic, 8-byte big-endian seq, msgpack batch]`.
-  The batch is `[ts, events, dp_rank?]`.
-- Decode **both** encodings:
-  - legacy positional arrays: `BlockStored` has 9 fields, `BlockRemoved` 3, `AllBlocksCleared`;
-  - named-field maps (vLLM PR #42892 format).
-  Handle sequence gaps (log them; resync via the replay endpoint where available).
+- **Socket direction:** the gateway **binds** one ZMQ SUB socket per worker and each worker **dials in**.
+  - vLLM: set `--kv-events-config` `endpoint` to the gateway's address *without* `*`; vLLM's publisher
+    connects when there is no wildcard.
+  - llm-d-inference-sim: always dials its `--zmq-endpoint`.
+  - Per-worker sockets identify the worker without relying on topics. (FINDINGS-M0 §A3, §A10.)
+- Frames: `[topic, 8-byte big-endian seq, msgpack batch]`. The batch is `[ts, events, dp_rank?]`.
+  vLLM's `seq` starts at 0, the sim's at 1.
+- Encodings:
+  - **named-field maps** (vLLM PR #42892) are **primary**. vLLM v0.30.0 sends only maps, and the sim is
+    run with `--use-vllm-map-event-format true`;
+  - legacy positional arrays are a **fallback decoder** (`BlockStored` has 9 positions, `BlockRemoved` 3,
+    `AllBlocksCleared`).
+- **Stale and re-delivered batches.**
+  - A dialing publisher queues batches while no subscriber is connected, so a (re)started gateway can
+    receive old batches.
+  - Track `(worker, seq)`: drop duplicates and out-of-order repeats, and log gaps (resync via the replay
+    endpoint where available).
+  - Use `ts` to discard batches older than the gateway's start time.
+  - Treat `BlockStored` idempotently.
+  - **The index is in-memory and is rebuilt from scratch on gateway restart;** it is never persisted.
 - Index per worker:
   - block hash → `{parent_hash, token_count, stored_at, session?}`;
   - per-session block lists when events carry session labels;
