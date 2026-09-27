@@ -339,6 +339,43 @@ variants).
 
 Downloads live in the gitignored `data/` directory, fetched by the pinned revision above.
 
+### Labelled set 042026: stop reasons and gaps (measured on the pinned file; M0 recon, not a committed result)
+
+These numbers come from a throwaway script in M0 and will be regenerated from `results/**/*.json` by M1's
+E1 before being used anywhere else (SPEC §0.2).
+
+- 59,274 requests in 739 traces. There are **70 subagent groups** (the card implies none).
+- `stop`:
+
+  | Stop reason | Requests | Share |
+  |---|---|---|
+  | `tool_use` | 51,370 | ~87% |
+  | empty string | 4,495 | ~8% |
+  | `end_turn` | 3,339 | ~6% |
+
+- `input_types`: `[tool_result]` on 50,474 requests and `[text]` on 7,885.
+- `think_time` (gap after a request, in seconds), grouped by that request's `stop`:
+
+  | After `stop` = | n | p50 | p90 | p99 |
+  |---|---|---|---|---|
+  | `tool_use` | 51,025 | 9 | 124 | 2,623 |
+  | `end_turn` | 2,950 | 15 | 124 | 1,840 |
+  | empty | 4,377 | 54 | 962 | 3,592 |
+
+- **Gap length does not separate tool from user pauses.** Classifying "gap > T means user" gives:
+
+  | T (s) | Recall on user gaps | Tool gaps wrongly called user |
+  |---|---|---|
+  | 5 | 0.865 | 0.741 |
+  | 10 | 0.668 | 0.449 |
+  | 30 | 0.232 | 0.216 |
+  | 60 | 0.155 | 0.152 |
+  | 120 | 0.103 | 0.103 |
+
+- Tool-pause gaps here are much longer than the "2–30 s" reported by NVIDIA Dynamo (SPEC §3.1): p90 is
+  124 s. Both figures need care. `think_time` is a wall-clock gap that includes the human, and the
+  Dynamo figure comes from a different measurement.
+
 ## A8 — Session identifiers sent by Claude Code / OpenCode / Codex
 
 **Claude Code 2.1.205: ✅ captured (run).** OpenCode: see the end of this section. Codex: skipped (the
