@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §13 M2/M5: block-subsampled replay (verify ranking at k=1 vs k=4 in M2); E7 long-context note; deferred M0 runtime checks listed.
 - 2026-09-27 — §6.1.6, §6.5: LRU horizon measured from `vllm:kv_block_idle_before_evict_seconds` when available; event-rate estimate kept as fallback and cross-check; candidate sim-patch metric.
 - 2026-09-27 — §6.1.2: strip Claude Code's billing-header `cc_version` suffix for fingerprints/ProgramId only; forwarded bytes unchanged.
 - 2026-09-27 — §6.2.1, §6.1.7: `?beta=true` path matching; `created_cache_tokens`; Anthropic cache usage from the final `message_delta`; compressed upstream handling.
@@ -958,6 +959,8 @@ Rough effort assumes one developer working with a coding agent. Adjust freely.
 - Build the lifecycle state machine (hint mode), pause predictor + priors, retention policy (retain/pin),
   program affinity, the `Tether` router, and the miss explainer (sim version).
 - Run E2 (reduced grid first), E3, and E4.
+- Check **block-subsampled replay** (see M5): run a reduced E2 grid at k = 1 and k = 4 and confirm the
+  policy ranking is the same before M5 relies on it.
 - ✅ **Done when:** first `RESULTS.md` draft with charts 1–6 from sim data, and an honest read on H1–H3.
 - **Human checkpoint.** If H1 shows no benefit anywhere, stop and discuss before building the gateway.
 
@@ -980,8 +983,22 @@ Rough effort assumes one developer working with a coding agent. Adjust freely.
 **M5 — Real GPU validation (2–3 days; needs human approval for spend)**
 - Launch scripts for 2 vLLM workers with pinned flags. Build the micro-benchmark for the sim cost profile.
 - Run E6, plus the AIPerf cross-check on the baseline.
-- Runtime checks deferred from M0 (filled in at the end of M0 from `docs/FINDINGS-M0.md`):
-  - _(none yet)_
+- **Context length.** Candidate 4–8B models have 32K–41K native context (FINDINGS-M0 §A11), while the
+  AgentX median input is ~142K tokens (reported, §3.1). Options:
+  - replay a `--max-context` subset;
+  - **block-subsampled replay:** keep every k-th `hash_id` by index. That preserves the prefix-sharing
+    structure while shrinking contexts k times. Only usable if M2 showed the same policy ranking at k = 1
+    and k = 4;
+  - RoPE scaling.
+
+  Decide here.
+- **E7 needs long native context:** Claude Code's base prompt alone was ~13.7K tokens (FINDINGS-M0 §A5).
+  Choose the E7 model with that in mind.
+- Runtime checks deferred from M0 (from `docs/FINDINGS-M0.md`):
+  - `--num-gpu-blocks-override` takes effect on GPU and shows in `vllm:cache_config_info`'s
+    `num_gpu_blocks_override` / `num_gpu_blocks` labels (§A4);
+  - the chosen model's tool calling is reliable under Claude Code and OpenCode on vLLM v0.30.0 (§A11);
+  - GPU vLLM's default block size (16) and `medium` label in KV events (the CPU image used 128) (§A3).
 - ✅ **Done when:** E6 results and sim calibration error are committed, and every deferred M0 runtime
   check above is confirmed or corrected. Target ≤ 10 GPU-hours total.
 
