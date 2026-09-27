@@ -378,7 +378,7 @@ E1 before being used anywhere else (SPEC §0.2).
 
 ## A8 — Session identifiers sent by Claude Code / OpenCode / Codex
 
-**Claude Code 2.1.205: ✅ captured (run).** OpenCode: see the end of this section. Codex: skipped (the
+**Claude Code 2.1.205: ✅ captured (run). OpenCode 1.18.32: ✅ captured against local vLLM (run).** Codex: skipped (the
 owner decided not to install Node).
 
 ### Method
@@ -488,6 +488,48 @@ owner decided not to install Node).
   So Anthropic ignores the per-session block-0 suffix when caching, as vLLM does (A11).
 - **Response headers** include `anthropic-ratelimit-unified-*` (subscription limits),
   `anthropic-organization-id`, `request-id` and `cf-ray`. None of them is needed by Tether.
+
+### OpenCode 1.18.32 → capture proxy → local vLLM v0.30.0 (CPU, Qwen2.5-0.5B), no key
+
+**✅ Captured (run).**
+- Setup:
+  - OpenCode binary v1.18.32 in `~/.opencode/bin`, SHA-256 checked against GitHub's published digest;
+  - config, data and cache folders redirected to the scratchpad;
+  - a custom `@ai-sdk/openai-compatible` provider pointing at the proxy.
+- Two runs: `opencode run "Use the bash tool to run: ls"`, then `opencode run -c "Now say done."`,
+  producing 5 requests.
+- Structure only is recorded here; raw bodies were deleted after writing this.
+- `opencode run` blocked on reading stdin until it was run with `< /dev/null`. That's worth knowing for
+  scripted E7 runs.
+
+What it sends:
+- **Session identity:** every request carries **`x-session-id`** plus **`x-session-affinity`**, both
+  holding the same OpenCode session id (format `ses_…`).
+  - It is one value for all 5 requests: the side call, both turns and the `-c` continuation.
+  - `x-session-id` is exactly the header vLLM v0.30.0 reads (A3), so vLLM labels KV events with
+    OpenCode's session with no gateway help.
+  - No `authorization` header was sent (no key configured).
+- **Endpoint:** `POST /v1/chat/completions`, with `stream: true` and `stream_options: {include_usage:
+  true}` set **by the client itself**, and `max_tokens` from the model limit.
+- **Side call:** the first request is title generation.
+  - It has **no tools**, a ~2.1K-character system message and roles `system, user, user`.
+  - It carries **the same session id as the main conversation**. So side calls must be classified by
+    shape (no tools, small system prompt), as §6.1.2 already proposes, not by session id.
+- **Main turns:** 10 tools, `bash, edit, glob, grep, read, skill, task, todowrite, webfetch, write`, and a
+  ~22.9K-character system message.
+  - **The subagent launcher is `task` (lowercase).** The §7 default list `[Task, Agent, spawn_agent]`
+    needs case-insensitive matching.
+- **Tool loop:** `finish_reason: "tool_calls"` with `delta.tool_calls[].function.name = "bash"`. The
+  tool result comes back as a **`role: "tool"`** message. Roles went `system, user` →
+  `system, user, assistant, tool` → `…, assistant, user`.
+- **Retry:** the first main-turn request was abandoned by the client during slow CPU prefill (no
+  response was logged). An **identical** body followed, with the same session and no retry header.
+  - The retry hit **11,008 cached tokens**, so vLLM finished caching the abandoned attempt's prefill.
+  - This is the same pattern as Claude Code in A5. Retry detection must be "same session + identical
+    fingerprint".
+- **Usage** (OpenAI shape, `prompt_tokens_details`): side call `cached_tokens 0, created_cache_tokens
+  512`; later turns `cached_tokens` 11,008 → 11,136 → 11,136 with `created_cache_tokens 0`. The stable
+  system + tools prefix is reused across turns.
 
 ## A9 — Upstream status
 
