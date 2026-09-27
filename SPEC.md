@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §3.1, E1, E3: Dynamo pause figure labelled as reported; E1 reports full gap CDFs before TTL tuning; E3 adds short-pause-only and `max_ttl` variants.
 - 2026-09-27 — §6.1.4, §3.4 H2, E4: add a session-history predictor for sim/E4; the tool-keyed predictor is evaluated only on live data.
 - 2026-09-27 — §6.3: loader tags gaps spanning a subagent group as `SubagentWait`.
 - 2026-09-27 — §6.3, §6.4, §6.1.4, E2: traces have no tool/user labels; sim treats main-turn gaps as tool pauses, 042026 supplies the prior and a 13% re-label sensitivity run.
@@ -130,9 +131,14 @@ team (Sept 2026):
 - prefix-cache hit rate **above 96%** (each turn re-sends the whole conversation plus a small new tail);
 - **44%** of sessions spawn at least one subagent (median 4 subagent rollouts in those sessions).
 
-From NVIDIA Dynamo's analysis of Claude Code sessions: tool-call pauses of **2–30 s** between turns; a
-write-once/read-many cache pattern (11.7× cache reads vs writes in one 42-call session); and reasoning
-(`<think>`) tokens are roughly 40% of generated tokens but are never reused.
+Reported by NVIDIA Dynamo from its analysis of Claude Code sessions: tool-call pauses of **2–30 s**
+between turns; a write-once/read-many cache pattern (11.7× cache reads vs writes in one 42-call session);
+and reasoning (`<think>`) tokens are roughly 40% of generated tokens but are never reused.
+
+**Measured by us (M0 recon, FINDINGS-M0 §A7; to be regenerated as a committed E1 result):** on the
+labelled 042026 traces, gaps after a `tool_use` response have p50 ≈ 9 s but p90 ≈ 124 s, i.e. a much
+longer tail than "2–30 s". The two figures measure different things. TTL defaults are **not** tuned
+until E1 has reported the full gap distributions.
 
 ### 3.2 Why this breaks self-hosted serving
 
@@ -803,9 +809,9 @@ tether/
 
 | ID | Question | Where | Setup |
 |---|---|---|---|
-| **E1** | Does our loader see the same workload as published? | loader | Turns/session, input/output lengths, prefix reuse, subagent share, gap distributions (tool vs user). Must be close to published AgentX figures (§3.1); explain any differences. |
+| **E1** | Does our loader see the same workload as published? | loader | Turns/session, input/output lengths, prefix reuse, subagent share. **Full gap CDFs (p50/p75/p90/p99 and plot)** for main-turn gaps, `SubagentWait` gaps, and subagent inner gaps (062126), plus tool vs user gaps (042026). Reported before any TTL default is tuned. Must be close to published AgentX figures (§3.1); explain any differences. |
 | **E2** | H1: does lifecycle-aware retention help, and when? | sim | All 5 routers × actuator ∈ {noop, retain, pin, touch-model} × KV capacity ∈ {0.25, 0.5, 0.75, 1.0, 1.5}× aggregate working set × concurrency ∈ {8, 16, 32, 64} × workers ∈ {2, 4, 8}; 3 seeds. Plus the lifecycle-label sensitivity run (§6.3) on a representative subset |
-| **E3** | Which parts matter? | sim | Ablations: −predictor (fixed TTL 30 s), −program affinity, −budget, retain vs pin, `user_wait_policy` |
+| **E3** | Which parts matter? | sim | Ablations: −predictor (fixed TTL 30 s), −program affinity, −budget, retain vs pin, `user_wait_policy`; **short-pause-only** retention (grant only when predicted q90 < `max_ttl`); `max_ttl` ∈ {30, 60, 120, 300} s |
 | **E4** | H2: is pause length predictable? | loader + core | Session-history predictor (§6.1.4); 70/30 split by session; p90 coverage, q50 MAE, calibration curve. Tool-keyed predictor: live data only, in E7 |
 | **E5** | Does the real gateway match the simulator? | compose (gateway + patched sim workers) | Same configs as a subset of E2; per-metric agreement within tolerance (target ±10%) |
 | **E6** | Does it work on real GPUs? | 2 vLLM workers | `prefix_aware` vs `tether+touch` vs `tether+touch+spec_prefill` at 2 pressure levels (set via `--num-gpu-blocks-override` **[VERIFY]**); also calibrate the sim profile and report sim-vs-real error |
