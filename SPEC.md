@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.2.1, §7, §12, §15: client `authorization`/`x-api-key` stripped by default when forwarding to workers; optional per-worker token from env; `forward_client_auth: true` to opt in; protocol test added. Replaces `actuators.reuse_client_auth`.
 - 2026-09-27 — §13 M2/M5: block-subsampled replay (verify ranking at k=1 vs k=4 in M2); E7 long-context note; deferred M0 runtime checks listed.
 - 2026-09-27 — §6.1.6, §6.5: LRU horizon measured from `vllm:kv_block_idle_before_evict_seconds` when available; event-rate estimate kept as fallback and cross-check; candidate sim-patch metric.
 - 2026-09-27 — §6.1.2: strip Claude Code's billing-header `cc_version` suffix for fingerprints/ProgramId only; forwarded bytes unchanged.
@@ -503,6 +504,13 @@ a readable report.
   before forwarding, so the client sees exactly what it asked for.
 - **Guards and headers:** carry over Cachet's request-body cap, hop-by-hop header stripping, and pure-Rust
   TLS (rustls).
+- **Client credentials are not forwarded by default.** Workers are self-hosted (every `kind`).
+  - When forwarding, the gateway **removes the client's `authorization` and `x-api-key` headers**, and
+    adds the worker's own token (`Authorization: Bearer <token>`) only if one is configured for that
+    worker.
+  - Forwarding the client's credentials unchanged requires `forward_client_auth: true`.
+  - Why: coding agents send their real provider credentials (M0 saw Claude Code send its OAuth bearer
+    token to a local vLLM; FINDINGS-M0 §A5), and a self-hosted worker has no reason to receive them.
 - **Response headers added:** `x-tether-worker`, `x-tether-session`, `x-tether-route` (router reason
   code), and on non-streaming responses `x-tether-cached-tokens`.
 
@@ -728,8 +736,10 @@ cache-policy research" and link llm-d RFC #2584. The upstream PR is a portfolio 
 ```yaml
 listen: 127.0.0.1:9100
 upstream_timeout_s: 600
+forward_client_auth: false   # true = pass client authorization/x-api-key to workers unchanged (§6.2.1)
 workers:
-  - { name: w0, url: http://127.0.0.1:8000, kind: vllm, metrics_url: http://127.0.0.1:8000/metrics, kv_events: tcp://127.0.0.1:5557 }
+  # auth_token_env (optional): name of an env var holding this worker's token; never put the token itself here
+  - { name: w0, url: http://127.0.0.1:8000, kind: vllm, metrics_url: http://127.0.0.1:8000/metrics, kv_events: tcp://127.0.0.1:5557, auth_token_env: TETHER_W0_TOKEN }
   - { name: w1, url: http://127.0.0.1:8001, kind: vllm, metrics_url: http://127.0.0.1:8001/metrics, kv_events: tcp://127.0.0.1:5558 }
 router:
   policy: tether            # round_robin | least_loaded | sticky | prefix_aware | tether
@@ -917,6 +927,9 @@ KV events on real workers), each with LRU (`noop`).
 - **Protocol tests:** recorded SSE fixtures for OpenAI and Anthropic streaming (tool calls, parallel tool
   calls, errors mid-stream, usage chunk). The gateway output must be byte-identical to upstream except for
   the documented headers and the removed injected-usage chunk.
+- **Auth-stripping test:** with the default config, a request carrying `authorization` and `x-api-key`
+  reaches a fake worker with neither header, plus the configured worker token when one is set. With
+  `forward_client_auth: true` both arrive unchanged. The same holds for actuator requests.
 - **Integration:** docker compose with 2 patched sim workers; replay 10 sessions; assert that metrics
   appear and that decisions were made.
 - **Determinism:** run the sim twice in CI, then diff `summary.json`.
@@ -1049,12 +1062,14 @@ Rough effort assumes one developer working with a coding agent. Adjust freely.
 
 ## 15. Security
 
-- Never log credentials or bodies (§0.7). Auth headers pass through untouched; Tether adds no credentials of
-  its own.
+- Never log credentials or bodies (§0.7).
+- **Client credentials stay with the client by default** (§6.2.1): `authorization` and `x-api-key` are
+  removed before forwarding to any worker. They are replaced by the worker's own token if one is
+  configured (read from the env var named by `auth_token_env`; never stored in config files). Forwarding
+  client credentials requires `forward_client_auth: true`.
 - Actuator requests (touch/spec-prefill) re-send the session's own content to the **same** worker the
-  session already used, with the client's original auth headers **only if** the operator enables
-  `actuators.reuse_client_auth`. Otherwise they use a configured worker token. Default for local workers:
-  no auth.
+  session already used and follow the same rule: the worker token by default, the client's credentials
+  only with `forward_client_auth: true`.
 - Bind `127.0.0.1` by default. The dashboard and admin endpoints have no auth; don't expose them.
 - The decision log contains fingerprints and token counts, never content.
 - **Captured traffic** (M0 recon, E7, debugging): raw captures live outside the repo (or under a
