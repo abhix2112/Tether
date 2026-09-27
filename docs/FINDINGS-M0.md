@@ -84,11 +84,20 @@ The same 2,005-token streaming chat request was sent three times (`stream_option
 - **Topic:** `kv@<POD_IP>:<port>@<model>`.
 - **Frames:** `[topic, 8-byte big-endian seq, msgpack batch]`; batch = `[ts: f64, events, dp_rank?]`.
   This matches SPEC §6.2.4.
-- **Legacy positional `BlockStored`:** `[tag, block_hashes, parent_block_hash, token_ids, block_size,
-  lora_id?, medium?, lora_name?]`, i.e. **8 positions in the sim, not the 9 SPEC §6.2.4 states**. The
-  field count is re-checked against vLLM under A3; the decoder must accept either.
-- **Map format:** `--use-vllm-map-event-format true` (vLLM PR #42892 schema). In it,
-  `parent_block_hash` is `null` instead of `0` when there's no cached prefix.
+- **Legacy positional `BlockStored` has 9 positions on the wire**, as SPEC §6.2.4 says:
+  `[tag, block_hashes, parent_block_hash, token_ids, block_size, lora_id, medium, lora_name, extra_keys]`.
+  - `docs/kv-cache.md` lists only 8. The 9th, `extra_keys`, is in the source
+    (`pkg/kvcache/kv_cache_sender.go`, `msgpackBlockStoredEvent`).
+  - Array encoding can't omit a position, so empty optional fields arrive as `nil`.
+  - Observed (A10): `["BlockStored", [15 hashes], 0, [960 token ids], 64, nil, "GPU", nil, nil]`.
+- **Map format:** `--use-vllm-map-event-format true` (vLLM PR #42892 schema). Observed keys:
+  `type, block_hashes, parent_block_hash, token_ids, block_size, medium`.
+  - The source also defines `lora_id`, `lora_name`, `extra_keys`, `group_idx`, `kv_cache_spec_kind` and
+    `kv_cache_spec_sliding_window`, all omitted when empty.
+  - `parent_block_hash` is `null` instead of `0` when there's no cached prefix.
+  - **No session field** in either format at v0.11.2.
+- The sim imports its event types from `github.com/llm-d/llm-d-router/pkg/kvevents`. That is llm-d's
+  router, so this is the format a production llm-d router consumes.
 - **Batching:** events are flushed every `event-batch-size` events (default 16) or every 1 s.
 - **Replay:** `--kv-events-replay-endpoint` binds a ROUTER. A request is `[identity, "", startSeq(8B BE)]`;
   replies are live-shaped frames, then a sentinel (`seq = 0xFFFF…FF`, empty topic and payload).
@@ -129,7 +138,20 @@ _Pending._
 
 ## A10 — Pure-Rust `zeromq` SUB against vLLM's PUB
 
-_Pending._
+**Against the sim: ✅ works (run).** **Against vLLM: _pending_.**
+
+- Throwaway test program (not committed): `zeromq = "=0.6.0"` (features `tokio-runtime`,
+  `tcp-transport`, no default features), `rmpv = "=1.3.1"`, `tokio = "=1.53.1"`.
+- A `SubSocket` **bound** to `tcp://127.0.0.1:5557`, subscribed to `""`. The sim (v0.11.2,
+  `--zmq-endpoint tcp://127.0.0.1:5557`) dialed in.
+- Four chat requests of 1000, 1000, 1500 and 2000 words produced one 3-frame message:
+  - topic `kv@127.0.0.1:8010@test-sim-model`, seq 1, batch `[ts, events]`;
+  - three `BlockStored` events with 15, 8 and 8 blocks. The repeated 1000-word request stored nothing
+    (fully cached), and the longer prompts only added their new tail blocks, parented on the previous
+    last block;
+  - both the legacy positional and the map encodings decode with `rmpv`.
+- Not yet exercised: `BlockRemoved` (the test never filled the 40-block cache), the replay ROUTER
+  endpoint, and reconnection.
 
 ## A11 — Small model for GPU validation
 
