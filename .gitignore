@@ -1,0 +1,21 @@
+# Rust build output
+/target/
+
+# Raw traffic captures may contain prompts or credentials; never commit them (SPEC §15).
+captures/
+
+# Downloaded traces and model files are fetched by pinned revision, not committed.
+/data/
+
+# Large raw run logs; small results/**/*.json files are committed.
+results/**/*.jsonl
+decisions.jsonl
+
+# Python (analysis/)
+.venv/
+__pycache__/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
