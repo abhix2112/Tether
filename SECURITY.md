@@ -7,7 +7,11 @@ modeled on Cachet's SECURITY.md.
 
 - Tether binds to `127.0.0.1` by default. The `/__tether/*` dashboard and admin endpoints have **no
   authentication**. Do not expose them to a network you don't trust.
-- Tether adds no credentials of its own. Client auth headers are passed through to workers unchanged.
+- **Client credentials are not forwarded to workers by default.** Tether removes the client's
+  `authorization` and `x-api-key` headers before forwarding. It adds a worker's own token only if you
+  configure one, via an environment variable named by `auth_token_env`; tokens never go in config files.
+  Set `forward_client_auth: true` only if your workers really need the client's credentials. Coding agents
+  send their real provider credentials, and a self-hosted worker should not receive them.
 - Tether never logs `Authorization`, `x-api-key`, or prompt/response bodies at `info` level or above.
   Debug-level body logging is opt-in and truncated.
 - The decision log contains fingerprints and token counts, never content.
