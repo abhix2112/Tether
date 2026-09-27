@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.1.2: strip Claude Code's billing-header `cc_version` suffix for fingerprints/ProgramId only; forwarded bytes unchanged.
 - 2026-09-27 — §6.2.1, §6.1.7: `?beta=true` path matching; `created_cache_tokens`; Anthropic cache usage from the final `message_delta`; compressed upstream handling.
 - 2026-09-27 — §3.3, §9: vLLM status updated (#53423 merged, plumbing only; #51381 in v0.30.0); vLLM pinned to v0.30.0.
 - 2026-09-27 — §6.2.4: gateway binds one SUB per worker, workers dial in; map encoding primary; seq/ts dedupe; index rebuilt on restart.
@@ -320,6 +321,11 @@ Resolution order (first match wins):
 3. **Lineage matching** (always runs, and is used to validate 1–2):
    - Compute a fingerprint per message: `xxh3(role ‖ normalized content ‖ tool_call ids/names)`.
      Normalization trims whitespace and canonicalizes JSON key order for tool arguments.
+   - **Claude Code billing header.** Claude Code's first system block is
+     `x-anthropic-billing-header: cc_version=<X.Y.Z>.<suffix>; cc_entrypoint=<name>;` (plus
+     `cc_is_subagent=true;` for subagents), and the `<suffix>` varies (FINDINGS-M0 §A8). For
+     fingerprints and `ProgramId` **only**, remove the `cc_version=…;` token from a system block that
+     starts with `x-anthropic-billing-header:`. **The bytes forwarded upstream are never modified.**
    - Request R *continues* session S if R's message fingerprints start with S's last request fingerprints,
      followed by the assistant message S produced (allowing a "re-rendered assistant" mismatch; see
      §6.1.7), followed by new messages (tool results or a user message).
