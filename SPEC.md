@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §11.3: side-call handling and side-class fairness are measured only in E7 (traces contain no side calls).
 - 2026-09-27 — §3.1, E1, E3: Dynamo pause figure labelled as reported; E1 reports full gap CDFs before TTL tuning; E3 adds short-pause-only and `max_ttl` variants.
 - 2026-09-27 — §6.1.4, §3.4 H2, E4: add a session-history predictor for sim/E4; the tool-keyed predictor is evaluated only on live data.
 - 2026-09-27 — §6.3: loader tags gaps spanning a subagent group as `SubagentWait`.
@@ -833,6 +834,11 @@ KV events on real workers), each with LRU (`noop`).
   - grants `used` / `expired` / `evicted`;
   - actuator overhead (extra requests, slot-seconds, decode tokens).
 - **Fairness:** TTFT of new sessions and side calls (retention must not starve them)
+- **Side traffic is measured only live (E7).** Every AgentX/Weka build filters out classifier calls
+  (`max_tokens ≤ 64` with no tools: title generation, suggestion mode, security monitor) at the source
+  (FINDINGS-M0 §A7). So the simulator and the replayer see essentially no `Side` traffic. Side-call
+  classification, side-call handling, and `class=side` fairness are reported from E7 only. Sim and
+  replay results report only `main` and `subagent`.
 - Miss attribution breakdown
 
 ### 11.4 Reporting rules
