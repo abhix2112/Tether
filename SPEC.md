@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.1.6, §6.5: LRU horizon measured from `vllm:kv_block_idle_before_evict_seconds` when available; event-rate estimate kept as fallback and cross-check; candidate sim-patch metric.
 - 2026-09-27 — §6.1.2: strip Claude Code's billing-header `cc_version` suffix for fingerprints/ProgramId only; forwarded bytes unchanged.
 - 2026-09-27 — §6.2.1, §6.1.7: `?beta=true` path matching; `created_cache_tokens`; Anthropic cache usage from the final `message_delta`; compressed upstream handling.
 - 2026-09-27 — §3.3, §9: vLLM status updated (#53423 merged, plumbing only; #51381 in v0.30.0); vLLM pinned to v0.30.0.
@@ -434,7 +435,10 @@ expected_hit_frac(w):
   else:                                      0
   (when the KV index has exact residency for R's blocks, use the exact longest-prefix match instead)
 
-H(w) = LRU horizon ≈ capacity_blocks(w) / block_allocation_rate(w)   // from BlockStored event rate
+H(w) = LRU horizon: measured when available, else estimated
+       measured:  from vllm:kv_block_idle_before_evict_seconds (histogram; vLLM v0.30.0)
+       estimated: capacity_blocks(w) / block_allocation_rate(w)   // from BlockStored event rate
+       both are computed when possible and their disagreement is exported as a metric (cross-check)
 load(w) = (running + waiting) / max_num_seqs(w)
 ```
 
@@ -701,7 +705,9 @@ publishes ZMQ KV events, and serves `/v1/messages`. Add:
    - `POST /v1/kv/retain {session_id, ttl_ms, priority, mode}` and `POST /v1/kv/release {session_id}`;
    - an optional per-request `retention_directives` / `retention_scope` field mirroring vLLM RFC #37003;
    - eviction order changes as in §6.3 (retain vs pin);
-   - new metrics `vllm:retained_blocks` and `tether_sim_retention_expired_total`.
+   - new metrics `vllm:retained_blocks` and `tether_sim_retention_expired_total`;
+   - candidate: `vllm:kv_block_idle_before_evict_seconds` with vLLM's semantics, so the measured LRU
+     horizon (§6.1.6) can be tested against the sim too.
 3. Unit tests in the sim's style, and docs in its `docs/kv-cache.md` style.
 
 Keep the patch small and self-contained, and maintain it in a fork. **Before opening an upstream PR, the
