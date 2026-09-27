@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.2.1, §6.1.7: `?beta=true` path matching; `created_cache_tokens`; Anthropic cache usage from the final `message_delta`; compressed upstream handling.
 - 2026-09-27 — §3.3, §9: vLLM status updated (#53423 merged, plumbing only; #51381 in v0.30.0); vLLM pinned to v0.30.0.
 - 2026-09-27 — §6.2.4: gateway binds one SUB per worker, workers dial in; map encoding primary; seq/ts dedupe; index rebuilt on restart.
 - 2026-09-27 — §11.3: side-call handling and side-class fairness are measured only in E7 (traces contain no side calls).
@@ -440,8 +441,10 @@ For each completed request with a known previous turn:
 
 - `expected_cached` = token length of the common prefix with the session's previous request (+ its
   output). In v1, approximate it from lineage (messages that match). In v2, use exact block hashes.
-- `actual_cached` = `usage.prompt_tokens_details.cached_tokens` (OpenAI shape) or the Anthropic
-  equivalent **[VERIFY what vLLM's /v1/messages returns]**.
+- `actual_cached` = `usage.prompt_tokens_details.cached_tokens` (OpenAI shape) or
+  `cache_read_input_tokens` from the final `message_delta` (Anthropic shape; verified on vLLM v0.30.0,
+  FINDINGS-M0 §A5). `created_cache_tokens` / `cache_creation_input_tokens` are recorded alongside. They
+  show what the request wrote to the cache, which helps separate `cold` from `evicted_in_pause`.
 - If `actual_cached ≥ 0.9 × expected_cached` → `hit`. Otherwise assign the first matching reason:
   1. `cold` — first turn of this program on any worker.
   2. `misroute` — a different worker held the prefix (per KV index / last worker) than the one chosen.
@@ -467,6 +470,8 @@ a readable report.
   - `POST /v1/chat/completions` (OpenAI);
   - `POST /v1/messages` (Anthropic; vLLM serves it for Claude Code **[VERIFY version]**);
   - `POST /v1/completions` (used by the replayer).
+- **Path matching ignores the query string:** Claude Code calls `POST /v1/messages?beta=true`. The query
+  string is forwarded unchanged.
 - **Everything else** under `/v1/*` is passed through to the chosen worker unchanged. For `GET
   /v1/models`, use any healthy worker.
 - **Streaming:** forward SSE chunk-by-chunk with no added buffering. Tee the stream into an incremental
@@ -474,7 +479,14 @@ a readable report.
   - stop reason and tool names:
     - OpenAI: `choices[].finish_reason`, `delta.tool_calls[].function.name`;
     - Anthropic: `content_block_start` with `type: tool_use`, `message_delta.stop_reason`;
-  - the final `usage`.
+  - the final `usage`:
+    - OpenAI shape: `usage.prompt_tokens_details.{cached_tokens, created_cache_tokens}`.
+      `created_cache_tokens` (vLLM v0.30.0) is the number of prompt tokens newly written to the cache;
+    - Anthropic shape: read cache usage (`cache_read_input_tokens`, `cache_creation_input_tokens`,
+      uncached `input_tokens`) from the **final `message_delta`**. On vLLM v0.30.0, `message_start`
+      reports the *total* as `input_tokens` with no cache fields (FINDINGS-M0 §A5).
+  - If the upstream response is compressed (`content-encoding`), the tee decompresses a copy for
+    inspection and forwards the original bytes unchanged.
 - **Usage injection:** for OpenAI streaming, if the client didn't set `stream_options.include_usage`, the
   gateway sets it upstream so it can read `cached_tokens`. It then **removes the extra usage-only chunk**
   before forwarding, so the client sees exactly what it asked for.
