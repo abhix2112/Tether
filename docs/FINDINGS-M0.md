@@ -17,8 +17,8 @@ Date of checks: 2026-09-27.
 | Rust toolchain | 1.98.1 | `rust-toolchain.toml` |
 | llm-d-inference-sim | tag `v0.11.2` = commit `7639395743c76f1cb37222981b33e8ea56cce69b` | latest release on 2026-09-27 (published 2026-08-31) |
 | llm-d-inference-sim image | `ghcr.io/llm-d/llm-d-inference-sim:v0.11.2@sha256:32144df791330a0006b747edfdf2b114a0fe728e023a9d1b3463eeb48d32abb9` | |
-| vLLM | _pending_ | |
-| AgentX dataset | _pending_ | |
+| vLLM | `v0.30.0` = commit `ced6857afa0ea7b2e3f0846a62e1394e90f15607`; CPU image `vllm/vllm-openai-cpu:v0.30.0` | first release containing both PR #48048 and PR #51381 |
+| AgentX dataset | `semianalysisai/cc-traces-weka-062126` @ `23f152f6f0f9399a85901b89a6458def0ef16729` | `traces.jsonl` sha256 `29b6a19e751ff5230771519aab755f80a0f43a4ba9cf96b72d3a6a437ec99276` |
 | Claude Code | _pending_ | |
 
 ---
@@ -126,7 +126,53 @@ _Pending._
 
 ## A7 — AgentX/Weka trace schemas, HF repo ids, license
 
-_Pending._
+**Verdict: ⚠️ partly differs from the spec.**
+- ✅ Repo ids, the license and the canonical 393-trace set are as the spec assumes.
+- ❌ The canonical set has **no** `stop` / `input_kind` / `input_types` fields and **no** SPAWN/JOIN
+  topology. Only the *oldest* set (042026) has `stop` / `input_types`. **Spec decision needed** (see
+  "Open questions" in [progress/M0.md](progress/M0.md)).
+
+**How:** run (downloaded and scanned the full canonical file) + docs (dataset cards).
+
+### Datasets (all `semianalysisai/*` on Hugging Face, all ungated, all Apache-2.0)
+
+| Dataset | Revision (commit) | `traces.jsonl` | Trace format | Traces | Subagents | Has `stop` / `input_types` |
+|---|---|---|---|---|---|---|
+| **`cc-traces-weka-062126`** (canonical AgentX) | `23f152f6f0f9399a85901b89a6458def0ef16729` | 1,847,151,435 B, sha256 `29b6a19e…ec99276` (verified locally) | v7 | 393 | yes (1,697 groups) | **no** |
+| `cc-traces-weka-062126-256k` | `8fecd2fc56694469f758f0afbbb6335ad3043740` | 568,864,747 B | v7 | _not downloaded_ | yes | presumably no |
+| `cc-traces-weka-with-subagents-051926` (schema example linked in §17) | `78b029aad10404c2ffef3329001588f3326a234b` | 1,076,644,069 B | v5 | 219 (card) | yes | no (card) |
+| `cc-traces-weka-042026` | `ae1ab9b568b8b5896c561692c40a6703cf5f8525` | 657,123,440 B | pre-v5 | 739 (card) | **no** | **yes** (card) |
+
+There are 23 `cc-traces*` datasets in total. Most are intermediate builds (051226 … 061526, `-256k`
+variants).
+
+### Canonical set, measured on the pinned file
+
+- 393 traces, 56,798 main-agent turns (56,432 streaming `s` + 366 non-streaming `n`), 1,697 subagent
+  groups, 42,029 subagent inner requests (all `n`). This matches the dataset card's `stats.txt` exactly.
+- Top-level keys: `id, models, block_size (=64 for all), hash_id_scope (="local" for all), requests`.
+- Main request keys: `t, type, model, in, out, hash_ids, api_time`; plus `ttft` (streaming only) and
+  `think_time` (absent on the 393 first turns).
+- Subagent group keys: `t, type="subagent", agent_id, subagent_type, duration_ms, total_tokens,
+  tool_use_count (null), status (all "completed"), requests, models`.
+- Inner request keys: `t, type, model, in, out, hash_ids, api_time, think_time`.
+- `subagent_type` is **always `"Subagent"`**. The traces can't distinguish a fresh subagent from a fork
+  (§6.1.2 `subagent_kind`).
+- **Not present anywhere:** `stop`, `input_kind`, `input_types`, `output_types`, SPAWN/JOIN.
+
+### Facts from the dataset cards (reported by SemiAnalysis, not measured by us)
+
+- **Classifier calls are filtered out** of every v5+ set: requests with `max_tokens ≤ 64` and no tools,
+  i.e. title generation, "SUGGESTION MODE", Security Monitor. So the traces contain essentially **no
+  `Side` traffic** (§6.1.2). Side-call handling can't be evaluated from traces; it needs E7's live capture.
+- `in` and `hash_ids` are measured in the proxy's tokenizer (`o200k_base`). The card says Anthropic
+  typically reports ~60% of that count for the same content. For v7, `in` = hash-block count × 64 and
+  overcounts for very large contexts; requests with `in` > 990,016 were dropped.
+- `hash_id_scope: local`: block ids are only comparable **within** one trace.
+- 042026 additionally carries per-trace `system_tokens` and `tool_tokens`, and per-request
+  `output_types`.
+
+Downloads live in the gitignored `data/` directory, fetched by the pinned revision above.
 
 ## A8 — Session identifiers sent by Claude Code / OpenCode / Codex
 
@@ -134,7 +180,25 @@ _Pending._
 
 ## A9 — Upstream status
 
-_Pending._
+**Verdict: ⚠️ one change from the spec: vLLM PR #53423 is merged, not open.** **How: GitHub API, checked
+2026-09-27.**
+
+| Item | Spec says | Status on 2026-09-27 | In a vLLM release? |
+|---|---|---|---|
+| vLLM PR #48048 session id plumbing | merged | merged 2026-08-03 | yes: v0.29.0 and v0.30.0 |
+| vLLM PR #51381 `session_id` on BlockStored | merged | merged 2026-09-04 | **v0.30.0** (not v0.29.0) |
+| vLLM PR #42892 KV events map encoding | — | merged 2026-06-09 | yes |
+| vLLM PR #53423 KV hints request envelope | **open** | **merged 2026-09-21** | **no**: only on main after v0.30.0 |
+| vLLM RFC #37003 retention API | open | open (updated 2026-09-09) | — |
+| vLLM PR #38514 retention API impl | open | open (updated 2026-09-20) | — |
+| vLLM RFC #57103 programmable KV | design only | open (updated 2026-09-24) | — |
+| vLLM RFC #48501 session-centric KV | — | open (updated 2026-09-23) | — |
+| llm-d #2584 | proposal | open, 1 comment | — |
+| AIBrix #2814 | proposal | open, 1 comment | — |
+| agentic-api #364 | plan | open, 0 comments | — |
+
+"In a release" was checked with the GitHub compare API: the merge commit is an ancestor of the tag.
+**What #53423 actually does, and whether it changes Tether's design, is checked under A3.**
 
 ## A10 — Pure-Rust `zeromq` SUB against vLLM's PUB
 
