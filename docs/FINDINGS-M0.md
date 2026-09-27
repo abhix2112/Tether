@@ -236,9 +236,9 @@ Note: on the CPU backend, KV size is set by `VLLM_CPU_KVCACHE_SPACE` (GB), so
   `vllm:prefix_cache_queries_total`, `vllm:prefix_cache_hits_total`, `vllm:cache_config_info{block_size,
   cache_dtype, enable_prefix_caching, gpu_memory_utilization, …}`.
 - Every series has labels `engine="0"` and `model_name`. The sim uses `model_name` only.
-- **`vllm:cache_config_info` does not expose `num_gpu_blocks` on the CPU backend's label set**
-  (truncated in the scrape; to re-check on GPU in M5). The sim exposes it. The gateway needs a fallback:
-  a per-worker `capacity_blocks` override (already in §6.2.3).
+- **Not verified:** whether `vllm:cache_config_info` carries a `num_gpu_blocks` label. My scrape
+  truncated that line at 250 characters before reaching it. Runtime check deferred to M5. The sim does
+  expose `num_gpu_blocks`. Either way, the per-worker `capacity_blocks` override (§6.2.3) is the fallback.
 
 - Declared in `vllm/v1/metrics/loggers.py`:
   - `vllm:num_requests_running`, `vllm:num_requests_waiting`;
