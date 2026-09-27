@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.4, §17: canonical AgentX corpus `cc-traces-weka-062126` pinned as the reference; 051926 kept as a schema example.
 - 2026-09-27 — §15: rules for captured traffic (outside the repo, redacted, structure-only commits).
 - 2026-09-27 — §13 M0/M5: source-reading answers allowed in M0 if labelled; deferred runtime checks become M5 items.
 - 2026-09-27 — §0.2: third-party numbers allowed only with an inline link and a "reported by <source>" label.
@@ -588,8 +589,10 @@ Every actuator call is recorded in the decision log with its cost (tokens, slot-
     `think_time`, `ttft`;
   - subagent groups: `agent_id`, `subagent_type`, `duration_ms`, nested `requests[]`;
   - newer versions add `stop`, `input_types`, `input_kind` and SPAWN/JOIN topology.
-- Support all versions found in M0 **[VERIFY exact schemas and HF repo ids; the canonical AgentX corpus is
-  the 393-trace "062126" set]**.
+- Reference corpus: **`semianalysisai/cc-traces-weka-062126`** (the canonical AgentX set: 393 traces, trace
+  format v7, Apache-2.0), pinned at revision `23f152f6f0f9399a85901b89a6458def0ef16729`. Other builds (e.g.
+  `cc-traces-weka-with-subagents-051926`, format v5) are schema examples only. Revisions, hashes and
+  schemas are in `docs/FINDINGS-M0.md` §A7.
 - Filters: `--max-context <tokens>`, `--sessions <N>`, `--seed`.
 
 **Synthesizer** (content from hash ids):
@@ -988,7 +991,8 @@ Rough effort assumes one developer working with a coding agent. Adjust freely.
 - vLLM agentic-api #364: https://github.com/vllm-project/agentic-api/issues/364
 - llm-d-inference-sim: https://github.com/llm-d/llm-d-inference-sim (see `docs/kv-cache.md`, `docs/latency-simulation.md`)
 - AIPerf Weka/AgentX replay docs: https://docs.nvidia.com/aiperf/dev/tutorials/datasets-inputs/replay-weka-agentic-coding-traces
-- Weka trace dataset example: https://huggingface.co/datasets/semianalysisai/cc-traces-weka-with-subagents-051926
+- AgentX trace corpus (canonical, 393 traces): https://huggingface.co/datasets/semianalysisai/cc-traces-weka-062126
+- Older Weka trace build, schema example only: https://huggingface.co/datasets/semianalysisai/cc-traces-weka-with-subagents-051926
 - Claude Code docs, *How Claude Code uses prompt caching* (prompt layering, what breaks the cache, subagents vs forks): https://code.claude.com/docs/en/prompt-caching
 - *How Do AI Agents Spend Your Money?* (token cost of agentic tasks): https://arxiv.org/abs/2604.22750
 - AgentKV (phase-aware KV eviction): https://arxiv.org/html/2609.14872
