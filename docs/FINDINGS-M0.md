@@ -382,4 +382,28 @@ Sim run:
 
 ## A11 — Small model for GPU validation
 
-_Pending._
+**Verdict: candidates identified from docs; "reliable tool calling" is a runtime property, so it is
+deferred to M5.** **How: docs** (vLLM `docs/features/tool_calling.md` and
+`docs/serving/integrations/claude_code.md` at v0.30.0, HF model cards and configs) **+ a run** of the
+same model family at 0.5B (A5).
+
+| Candidate | License / gated | Native context (`max_position_embeddings`) | vLLM tool parser (v0.30.0 docs) | Notes |
+|---|---|---|---|---|
+| **`Qwen/Qwen2.5-7B-Instruct`** @ `a09a35458c70` | Apache-2.0 / no | 32,768 | `hermes` (listed explicitly) | Same template/parser path as the 0.5B model that ran Claude Code end to end in A5 |
+| `Qwen/Qwen3-8B` @ `b968826d9c46` | Apache-2.0 / no | 40,960 | not listed in the Qwen section (which names Qwen2.5 and QwQ) | 36 layers, 8 KV heads, head_dim 128, the same shape as LEARNING.md §1.4's worked example |
+| `ibm-granite/granite-4.0-h-tiny` @ `791e0d3d28c8` | Apache-2.0 / no | 131,072 | `granite4` | **Hybrid Mamba:** prefix caching behaves differently (vLLM has `enable_mamba_fine_grained_prefix_cache`), so it is risky for KV experiments |
+| `meta-llama/Llama-3.1-8B-Instruct` | Llama 3.1 / **gated (manual)** | — | `llama3_json` | Gating adds friction; avoid |
+
+- **Recommendation for M5:** Qwen2.5-7B-Instruct (confirm tool-call reliability at runtime first), with
+  Qwen3-8B as the fallback.
+- **Problem for E6 (open question):** AgentX's median input is ~142K tokens (reported by the vLLM team;
+  SPEC §3.1). None of the dense 4–8B candidates fits that natively, so E6 must replay a
+  `--max-context`-filtered subset or use RoPE scaling. Decide in M5.
+- **Claude Code on vLLM needs:**
+  - `ANTHROPIC_AUTH_TOKEN=<dummy>`: required per the vLLM doc, and without it the OAuth token is used
+    (see A5);
+  - `CLAUDE_CODE_MAX_OUTPUT_TOKENS` below the context headroom.
+- **Per-request hash in the system prompt:** per the vLLM doc, Claude Code injects one, which defeats
+  prefix caching; vLLM versions after 0.17.1 handle it automatically. **This also affects Tether:**
+  message fingerprints and `ProgramId` (§6.1.2) must strip the same hash, or every request looks like a
+  new program. The exact form is to be confirmed in the A8 capture.
