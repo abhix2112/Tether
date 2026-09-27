@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §13 M0/M5: source-reading answers allowed in M0 if labelled; deferred runtime checks become M5 items.
 - 2026-09-27 — §0.2: third-party numbers allowed only with an inline link and a "reported by <source>" label.
 
 ---
@@ -850,6 +851,9 @@ Rough effort assumes one developer working with a coding agent. Adjust freely.
 - Check every **[VERIFY]** item and write `docs/FINDINGS-M0.md`.
 - Scaffold the workspace, CI, `CLAUDE.md` / `AGENTS.md`, licenses.
 - ✅ **Done when:** FINDINGS-M0 answers every Appendix A item, and CI is green on an empty workspace.
+  An answer may be "verified by source reading at <version>; runtime check deferred to M5" when no
+  runtime check was possible in M0; it must be labelled that way, and each deferred check is added to the
+  M5 checklist below.
 
 **M1 — Traces + simulator + baselines (≈1 week)**
 - Build `tether-traces` (loader, filters, synthesizers) and `tether-bench stats` (E1).
@@ -888,7 +892,10 @@ Rough effort assumes one developer working with a coding agent. Adjust freely.
 **M5 — Real GPU validation (2–3 days; needs human approval for spend)**
 - Launch scripts for 2 vLLM workers with pinned flags. Build the micro-benchmark for the sim cost profile.
 - Run E6, plus the AIPerf cross-check on the baseline.
-- ✅ **Done when:** E6 results and sim calibration error are committed. Target ≤ 10 GPU-hours total.
+- Runtime checks deferred from M0 (filled in at the end of M0 from `docs/FINDINGS-M0.md`):
+  - _(none yet)_
+- ✅ **Done when:** E6 results and sim calibration error are committed, and every deferred M0 runtime
+  check above is confirmed or corrected. Target ≤ 10 GPU-hours total.
 
 **M6 — Live harness evaluation and explainer (≈4 days)**
 - Run E7 and `tether doctor` (HTML report). Finish the dashboard.
