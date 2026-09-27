@@ -341,29 +341,116 @@ Downloads live in the gitignored `data/` directory, fetched by the pinned revisi
 
 ## A8 — Session identifiers sent by Claude Code / OpenCode / Codex
 
-**Claude Code: partial (free probe done; real capture pending the owner's go-ahead).** OpenCode:
-_pending_. Codex: skipped (the owner decided not to install Node).
+**Claude Code 2.1.205: ✅ captured (run).** OpenCode: see the end of this section. Codex: skipped (the
+owner decided not to install Node).
 
-### Free probe (no request reached Anthropic)
+### Method
 
-- **Claude Code 2.1.205**, OAuth (subscription) login, `ANTHROPIC_BASE_URL=http://127.0.0.1:9199`,
-  pointed at a local listener that recorded only method, path, header **names**, auth scheme and top-level
-  body keys, then answered 503.
-- ✅ An OAuth login **does** use a custom `ANTHROPIC_BASE_URL`. It sends `Authorization: Bearer …` and no
-  `x-api-key`. So a logging passthrough to `api.anthropic.com` is feasible for the real capture.
-- The request is `POST /v1/messages?beta=true`, so **the path carries a query string**. The gateway must
-  match `/v1/messages` regardless of query.
-- Header names sent:
-  - `accept, accept-encoding, anthropic-beta, anthropic-dangerous-direct-browser-access, anthropic-version,
-    authorization, connection, content-length, content-type, host, user-agent, x-app,`
-  - **`x-claude-code-session-id`**,
-  - `x-stainless-arch, -lang, -os, -package-version, -retry-count, -runtime, -runtime-version, -timeout`.
-- **`x-claude-code-session-id` is a harness-specific session header**, the §6.1.2 step 2 candidate. Still
-  to confirm in the real capture: is it stable across turns, and what do subagents and `/compact` send?
-- Top-level body keys: `context_management, max_tokens, messages, metadata, model, output_config, stream,
-  system, thinking, tools`.
-- On a 503 it retried with the same headers (`x-stainless-retry-count` increments). Six attempts were seen
-  in 25 s.
+- Claude Code 2.1.205, OAuth login, `ANTHROPIC_BASE_URL` pointed at a local passthrough proxy that
+  forwarded to `https://api.anthropic.com`. Every header was forwarded unchanged (including
+  `anthropic-beta`, `cache_control` and `accept-encoding`), and responses were streamed back unchanged.
+- At write time the proxy replaced `authorization`, `x-api-key` and `cookie` values with `<redacted>`, and
+  hashed `x-claude-code-session-id` and each field of `metadata.user_id` with a random salt that was never
+  written to disk. It was tested beforehand with fake secrets: none survived into any written file.
+- Raw redacted bodies were kept in the session scratchpad only, and **deleted after this section was
+  written**. Only structure is recorded here.
+- Sessions, all in a scratch project with tool permissions limited to what each session needed:
+  1. **tool call**: `ls` via Bash, 2 requests;
+  2. **subagent**: `Agent` → subagent `Read`, 4 requests;
+  3. **`/compact`**: 3 turns → `/compact` → 1 question, via `claude -p` then `claude -c -p`, 5 requests;
+  4. **plain chat**: 1 request.
+- **Proxy fault, disclosed:** the first version of the proxy stalled every upstream connect for ~135 s
+  (Python tried the unreachable IPv6 address first) and mis-parsed gzip responses.
+  - For sessions 1 and 4 and the first attempts at 2 and 3, the **request side is valid**, but response
+    fields and all timings from those runs are **discarded**.
+  - After fixing the proxy (IPv4 only for the upstream connect, gzip decoded for analysis only), sessions
+    2 and 3 were re-run. The subagent attempt had timed out; the first `/compact` attempt was refused
+    with "Not enough messages to compact".
+  - Response data below comes from the re-runs only.
+
+### Answers to the owner's questions
+
+1. **Is `x-claude-code-session-id` stable across turns?** ✅ **Yes.**
+   - It was identical for every request in a session, including across separate `claude -c`
+     invocations of one conversation (all 5 requests of session 3).
+   - It equals `metadata.user_id` → `session_id`: same hash. `metadata.user_id` is a JSON string with
+     keys `device_id, account_uuid, session_id`.
+   - It changes per new session (every `claude -p` without `-c`).
+2. **Do subagent requests carry the parent's session id or their own?** **The parent's.**
+   - All 4 requests of session 2 (parent → subagent × 2 → parent) share one session header and one
+     `metadata.user_id.session_id`.
+   - Subagent requests are marked instead **inside the first system block**, which ends with
+     `cc_is_subagent=true;` (see 5). They also have a different tool list (124 tools vs the parent's 25)
+     and different system blocks 0 and 2.
+3. **What changes after `/compact`?**
+   - The compaction itself is an ordinary `POST /v1/messages`: the same history plus a new final user
+     message carrying a large instruction text block. It reused the conversation's cache
+     (`cache_read_input_tokens` 31,586).
+   - The next request **rewrote the history from message 0**: the first user message gained a summary
+     block, and the system-role messages changed. Only a short, generic assistant reply kept its
+     fingerprint.
+   - The first system block's hash suffix (see 5) changed at the same time.
+   - The session id did **not** change.
+   - **The message count went up (6 → 7), not down.** In this tiny session §6.1.2's "count dropped
+     sharply" rule would **not** detect compaction. A better signal: an explicit session id match plus
+     lineage breaking at message index ≤ 1.
+4. **How are retries marked?** **They aren't, by headers.**
+   - Free probe: a local listener answered 503 to every request. Claude Code retried 6 times with
+     backoff gaps ≈ 0.5, 1.2, 2.3, 4.7, 9.6 and 16.4 s.
+   - **`x-stainless-retry-count` was `"0"` on every attempt**, and the session id was unchanged.
+     (Corrects an earlier note in this file that assumed the count increments; that probe had recorded
+     header names only.)
+   - The client also dropped a slow stream and re-sent the turn (A5).
+   - So Tether must detect retries as **the same session + an identical request fingerprint** within a
+     short window.
+5. **Exact form of the per-request system-prompt hash.**
+   - `system` is a list of 3 text blocks: block 0 has no `cache_control`; blocks 1 and 2 do.
+   - **Block 0** is `x-anthropic-billing-header: cc_version=<X.Y.Z>.<short suffix>; cc_entrypoint=<name>;`
+     (80 characters here; `cc_entrypoint=claude-vscode` in this environment).
+   - For subagents, `cc_is_subagent=true;` is appended.
+   - The `<short suffix>` after the version is the varying part. It was constant **within** a session
+     (turn 1 → turn 2; turns 1–4 of session 3) and changed after `/compact`, together with the first
+     user message. That fits a hash of early conversation content, but it's **not confirmed**.
+   - Block 1 was byte-identical across **every** request captured, subagents included.
+   - Block 2 differs per session.
+   - **Normalization rule for Tether (fingerprints/ProgramId only):** drop the
+     `cc_version=…<suffix>;` token from a system block that starts with `x-anthropic-billing-header:`.
+     Keep `cc_is_subagent` as a signal.
+6. **Do subagent requests share the parent's system/tools prefix?** **No (fresh subagent).**
+   - The subagent's system blocks 0 and 2 and its tool list differ from the parent's. Tool definitions
+     come first in the rendered prompt, so the token prefix diverges at the very start.
+   - Anthropic's usage agrees: the subagent's first request had `cache_read_input_tokens: 0` and
+     `cache_creation_input_tokens: 94,987`, and its second read those 94,987.
+   - This matches §6.1.2's "fresh" subagent kind. No fork was observed.
+
+### Other structure findings
+
+- **Every request:** `POST /v1/messages?beta=true`, `stream: true`, `model: claude-opus-4-8` (this
+  account's default), `max_tokens: 64000`, `thinking: {type: adaptive, …}`, `output_config: {effort}`,
+  `context_management: {edits: [{type: clear_thinking_…}]}`.
+- **`messages` contains `role: "system"` entries** between user and assistant turns: one
+  17,108-character system message follows the first user message. Lineage (§6.1.2) must accept them,
+  and vLLM `/v1/messages` compatibility with mid-conversation system messages is a question for M3.
+- **History is re-serialized between turns:**
+  - `cache_control` moves to the newest message each turn;
+  - an older user message changes from a block list to a plain string;
+  - content is unchanged. Fingerprint normalization must **strip `cache_control`** and **treat a string
+    and a single text block as equal**, or every turn looks like a prefix break.
+- **The tool list changed mid-session:** turn 1 had 25 tools; the turn after a tool result had 266. Tool
+  definitions are rendered first, so this is a full prefix change (a `tools_changed` event in
+  §6.1.7). It's probably caused by this machine's many MCP connectors, so it may be
+  environment-specific. Re-check in E7.
+- **Tool names:** the subagent launcher is **`Agent`** (the §7 default list `[Task, Agent, spawn_agent]`
+  covers it).
+- **Anthropic streams gzip-compressed SSE** (`content-encoding: gzip`). A gateway in front of an
+  upstream that compresses must decompress for its tee and forward the original bytes.
+- **Anthropic streaming usage** is the same in `message_start` and the final `message_delta` (unlike
+  vLLM, A5). It adds `cache_creation: {ephemeral_1h_input_tokens, ephemeral_5m_input_tokens}`,
+  `service_tier` and `inference_geo`.
+- **Cache reuse across separate sessions:** a new session's first request read 22,902 cached tokens.
+  So Anthropic ignores the per-session block-0 suffix when caching, as vLLM does (A11).
+- **Response headers** include `anthropic-ratelimit-unified-*` (subscription limits),
+  `anthropic-organization-id`, `request-id` and `cf-ray`. None of them is needed by Tether.
 
 ## A9 — Upstream status
 
