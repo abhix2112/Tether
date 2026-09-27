@@ -19,7 +19,7 @@ Date of checks: 2026-09-27.
 | llm-d-inference-sim image | `ghcr.io/llm-d/llm-d-inference-sim:v0.11.2@sha256:32144df791330a0006b747edfdf2b114a0fe728e023a9d1b3463eeb48d32abb9` | |
 | vLLM | `v0.30.0` = commit `ced6857afa0ea7b2e3f0846a62e1394e90f15607`; CPU image `vllm/vllm-openai-cpu:v0.30.0` | first release containing both PR #48048 and PR #51381 |
 | AgentX dataset | `semianalysisai/cc-traces-weka-062126` @ `23f152f6f0f9399a85901b89a6458def0ef16729` | `traces.jsonl` sha256 `29b6a19e751ff5230771519aab755f80a0f43a4ba9cf96b72d3a6a437ec99276` |
-| Claude Code | _pending_ | |
+| Claude Code | `2.1.205` | behaviour changes by version; A5/A8 observations are for this version |
 
 ---
 
@@ -127,6 +127,33 @@ Runtime observations:
 - Requests that were full prefix hits (`created_cache_tokens: 0`) produced **no** `BlockStored`, even
   with a session id. With the default report mode, reused blocks aren't re-announced, so the gateway
   can't learn "session S reused these blocks" from events alone.
+
+### `kv_cache_report_mode` (owner request f)
+
+- **It is per-request, not a server/config option at v0.30.0.**
+  - `vllm/v1/request.py` reads `sampling_params.extra_args["kv_cache_report_mode"]`, default
+    `"incremental"`.
+  - Clients set it with the body field `vllm_xargs: {"kv_cache_report_mode": "full"}`. This works on
+    chat, completions and `/v1/messages`; vLLM's own tests exercise the Anthropic path
+    (`tests/entrypoints/anthropic/test_anthropic_messages_conversion.py`).
+  - With `"full"`, a cache hit emits `BlockStored` for the **reused** blocks too
+    (`v1/core/kv_cache_manager.py`: "so that external consumers (e.g. gateway) can learn about them").
+- **Measured (run), same 3,328-token prompt, CPU block size 128:**
+
+  | Request | Usage | KV events |
+  |---|---|---|
+  | cold | `created_cache_tokens: 3328` | 2 `BlockStored` (6,500 B + 4,144 B), label `s-cold` |
+  | hit, incremental | `cached_tokens: 3328` | none |
+  | hit, `"full"` | `cached_tokens: 3328` | 1 `BlockStored` of **10,441 B** covering all 26 reused blocks, including `token_ids`, label `s-full` |
+
+- **Cost (not documented by vLLM; measured once):** about 3.1 bytes of event payload per *reused* prompt
+  token, on every hit. At a 142K-token agent turn (reported median) that's an estimated ~440 KB of
+  msgpack per request for the gateway to decode. There's no measurable engine-side cost at this scale.
+- **Recommendation (for M4, needs owner agreement):** it would give reused blocks their session labels,
+  but it needs a body change (`vllm_xargs`) to every forwarded request. Make it a per-worker opt-in
+  (`kv_report_full: true`) that adds `vllm_xargs.kv_cache_report_mode` only when the client didn't set
+  `vllm_xargs` itself. Default off; measure gateway decode cost in M4 before turning it on for
+  experiments.
 - Observed map keys: `type, block_hashes, parent_block_hash, token_ids, block_size, lora_id, medium,
   lora_name, extra_keys, group_idx, kv_cache_spec_kind` (+ `session_id` when set).
 - On the CPU backend, `block_size` is **128** and `medium` is still `"GPU"`. GPU vLLM defaults to 16.
@@ -172,7 +199,7 @@ Source:
 |---|---|---|
 | `--kv-events-config` (JSON) | `engine/arg_utils.py` | ✅ accepted by `vllm/vllm-openai-cpu:v0.30.0` |
 | `--enable-prompt-tokens-details` | server args | ✅ accepted |
-| `--num-gpu-blocks-override` | `engine/arg_utils.py` (`num_gpu_blocks_override`) | **source only; runtime check deferred to M5** (GPU-specific; see note) |
+| `--num-gpu-blocks-override` | `engine/arg_utils.py` (`num_gpu_blocks_override`); shows as the `num_gpu_blocks_override` label of `vllm:cache_config_info` | **source only; runtime check deferred to M5** (the CPU backend sizes KV by `VLLM_CPU_KVCACHE_SPACE`) |
 | `--block-size`, `--enable-prefix-caching`, `--max-num-seqs`, `--kv-cache-memory-bytes`, `--gpu-memory-utilization` | `engine/arg_utils.py` | — |
 | `--enable-auto-tool-choice --tool-call-parser hermes` | server args | ✅ accepted |
 | `ignore_eos` | request field on chat and completions (`ignore_eos: bool = False`) | ✅ exactly `max_tokens` generated, `finish_reason: "length"` |
@@ -236,9 +263,16 @@ Note: on the CPU backend, KV size is set by `VLLM_CPU_KVCACHE_SPACE` (GB), so
   `vllm:prefix_cache_queries_total`, `vllm:prefix_cache_hits_total`, `vllm:cache_config_info{block_size,
   cache_dtype, enable_prefix_caching, gpu_memory_utilization, …}`.
 - Every series has labels `engine="0"` and `model_name`. The sim uses `model_name` only.
-- **Not verified:** whether `vllm:cache_config_info` carries a `num_gpu_blocks` label. My scrape
-  truncated that line at 250 characters before reaching it. Runtime check deferred to M5. The sim does
-  expose `num_gpu_blocks`. Either way, the per-worker `capacity_blocks` override (§6.2.3) is the fallback.
+- ✅ **`vllm:cache_config_info` carries `num_gpu_blocks`**, even on the CPU backend (re-scraped without
+  truncation):
+  - `num_gpu_blocks="2048"`, `block_size="128"`, `kv_cache_size_tokens="262144"` (= 2048 × 128),
+    `kv_cache_memory_bytes="3221225472"`, `num_gpu_blocks_override="None"`;
+  - also `prefix_caching_hash_algo="sha256"`, `enable_prefix_caching="True"`, `kv_cache_max_concurrency`,
+    and ~20 other labels;
+  - so the gateway can read `capacity_blocks` and `block_size` from this one series, with the §6.2.3
+    override as a fallback.
+- `prefix_cache_retention_interval="0"` is **not** session retention: per `vllm/config/cache.py` it is
+  the checkpoint spacing for sliding-window/Mamba prefix-cache groups. It is unrelated to Tether.
 
 - Declared in `vllm/v1/metrics/loggers.py`:
   - `vllm:num_requests_running`, `vllm:num_requests_waiting`;
