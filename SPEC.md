@@ -16,6 +16,7 @@
 
 ### Changelog
 
+- 2026-09-27 — §6.4: sim runs at `--block-size 64` in word mode (one hash_id = one sim block); real vLLM keeps its default.
 - 2026-09-27 — §6.4, §17: canonical AgentX corpus `cc-traces-weka-062126` pinned as the reference; 051926 kept as a schema example.
 - 2026-09-27 — §15: rules for captured traffic (outside the repo, redacted, structure-only commits).
 - 2026-09-27 — §13 M0/M5: source-reading answers allowed in M0 if labelled; deferred runtime checks become M5 items.
@@ -600,8 +601,12 @@ Every actuator call is recorded in the decision log with its cost (tokens, slot-
   range (exclude special tokens; read vocab size from config). Send
   `POST /v1/completions {prompt: [ids], max_tokens: out, ignore_eos: true, temperature: 0, stream: true}`
   **[VERIFY token-id prompts and `ignore_eos` in the pinned vLLM]**.
-- **Word mode** (sim with its simulated tokenizer): map each hash id → 64 words from a fixed word list, so
-  one word ≈ one simulated token **[VERIFY block alignment in M0; adjust if needed]**.
+- **Word mode** (sim with its simulated tokenizer): map each hash id → 64 words from a fixed word list. The
+  sim's tokenizer gives one token per whitespace-separated word (verified in M0: 2,000 words → 2,005 chat
+  tokens, the extra 5 being chat-template overhead). Run `llm-d-inference-sim` with **`--block-size 64`**,
+  so one trace `hash_id` = one sim block. Send word-mode prompts to `/v1/completions` (no chat template)
+  so block boundaries line up exactly; confirm the zero-overhead count in M1. Real vLLM keeps its own
+  default block size (16 on GPU), and token-ID mode maps one `hash_id` to 64 tokens = 4 vLLM blocks.
 
 **Replayer:**
 - Closed-loop per session, concurrency N, trace timing with `--think-scale` and `--think-cap`.
